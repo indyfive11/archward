@@ -1,11 +1,13 @@
 """Left-side phase rail showing each pipeline phase + status.
 
 Phase 4: unicode icons. Phase 5 may swap for animated spinner during running.
+v2: clickable for back-navigation — selecting a row emits `phase_clicked`
+so the main window can switch the content area to that phase's view.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QListWidget, QListWidgetItem
 
 # Phase name → display label. Order here defines display order in the rail.
@@ -33,15 +35,24 @@ _STATUS_GLYPHS = {
 
 
 class PhaseRail(QListWidget):
-    """Left rail with one row per pipeline phase, status updated by the controller."""
+    """Left rail with one row per pipeline phase, status updated by the controller.
+
+    Clicking a row emits `phase_clicked(phase_key)` so the parent can navigate
+    the central content area to that phase's view. Useful after a run when
+    PacnewView needs attention but the stack has already auto-advanced to the
+    verify/result view.
+    """
+
+    phase_clicked = Signal(str)  # phase key (e.g. "pacnew", "risk", "verify")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._items: dict[str, QListWidgetItem] = {}
         self._status: dict[str, str] = {}
         self._build()
+        self.itemClicked.connect(self._on_item_clicked)
 
     def _build(self) -> None:
         for key, label in _PHASES:
@@ -76,3 +87,23 @@ class PhaseRail(QListWidget):
         for phase in list(self._status):
             if self._status[phase] == "pending":
                 self.set_status(phase, "skipped")
+
+    def select_phase(self, phase: str) -> None:
+        """Programmatically select a row without firing phase_clicked.
+
+        Used by the main window to sync the rail's highlighted row with the
+        currently-shown stack page when the pipeline auto-advances views.
+        """
+        item = self._items.get(phase)
+        if item is None:
+            return
+        self.blockSignals(True)
+        try:
+            self.setCurrentItem(item)
+        finally:
+            self.blockSignals(False)
+
+    def _on_item_clicked(self, item: QListWidgetItem) -> None:
+        phase = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(phase, str) and phase:
+            self.phase_clicked.emit(phase)

@@ -6,6 +6,31 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-05-14
+
+### Added
+
+- **Pacnew interactive merge in the GUI** — per-row action buttons (View Diff,
+  Keep Ours, Take New, Edit, Leave). View Diff opens a syntax-highlighted
+  unified-diff modal (red `-` / green `+` / gray `@@`), reading via `sudo cat`
+  fallback for root-owned originals. Edit launches meld / kdiff3 / kompare via
+  `sudo -A` with a sudoedit fallback hint. Apply actions reuse the existing
+  permission-preserving `take_new` path.
+- **Rail click navigation** — clicking a row in the phase rail jumps the
+  content stack to that phase's view. The active phase row is now highlighted
+  via single-selection so the user can see where they are in the stack.
+- **Auto-jump to actionable view at completion** — pipeline finish lands the
+  stack on the view that matters: `pacnew` when files need attention,
+  `verify` on FAIL. Avoids the v0.1.0 UX where the result strip read
+  "Pacnew Merge Needed" but the stack was stuck on verify.
+- **`ARCHWARD_PACNEW_INCLUDE_ALL=1` test-mode env var** — bypasses the
+  `find_pacnew_files()` mtime filter so pre-staged synthetic `.pacnew` files
+  show up in PacnewView for regression testing. Logs a warning when active.
+
+### Tests
+
+- 80 unit tests (78 baseline + 2 covering the env-var bypass).
+
 ## [0.1.0] — 2026-05-14
 
 Initial release.
@@ -75,5 +100,6 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/indyfive11/archward/releases/tag/v0.1.1
 [0.1.0]: https://github.com/indyfive11/archward/releases/tag/v0.1.0

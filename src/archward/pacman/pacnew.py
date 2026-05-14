@@ -23,8 +23,20 @@ log = logging.getLogger(__name__)
 def find_pacnew_files(roots: tuple[Path, ...] = (Path("/etc"),), since_epoch: int | None = None) -> list[Path]:
     """Find .pacnew files under `roots`. If `since_epoch` is given, filter to mtime > since.
 
+    Test-mode env var: setting `ARCHWARD_PACNEW_INCLUDE_ALL=1` bypasses the mtime
+    filter so all .pacnew files are returned regardless of age. Used to exercise
+    PacnewView's per-row buttons against pre-staged files without triggering a
+    real update. Logs a warning so the override isn't silent.
+
     Uses `sudo find` so the scan can traverse root-only directories like /etc/sudoers.d.
     """
+    include_all = os.environ.get("ARCHWARD_PACNEW_INCLUDE_ALL") == "1"
+    if include_all and since_epoch is not None:
+        log.warning(
+            "ARCHWARD_PACNEW_INCLUDE_ALL=1 — bypassing since_epoch filter; "
+            "all .pacnew files will be reported"
+        )
+
     found: list[Path] = []
     for root in roots:
         cmd = ["sudo", "-n", "find", str(root), "-name", "*.pacnew"]
@@ -49,7 +61,7 @@ def find_pacnew_files(roots: tuple[Path, ...] = (Path("/etc"),), since_epoch: in
             if not line:
                 continue
             p = Path(line)
-            if since_epoch is not None:
+            if since_epoch is not None and not include_all:
                 try:
                     if p.stat().st_mtime <= since_epoch:
                         continue

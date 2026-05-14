@@ -152,6 +152,7 @@ class MainWindow(QMainWindow):
         self._rail = PhaseRail()
         self._rail.setMinimumWidth(220)
         self._rail.setMaximumWidth(280)
+        self._rail.phase_clicked.connect(self._on_rail_clicked)
         self._log = LogPane()
         self._result_banner = ResultBanner()
 
@@ -227,6 +228,9 @@ class MainWindow(QMainWindow):
         self.bridge = QtEventBridge(self.bus, parent=self)
         self.bridge.event.connect(self._on_phase_event)
 
+        # PacnewView's per-row actions need access to sudo + bus.
+        self._views["pacnew"].set_context(self.strategy, self.bus)
+
         self.worker = PipelineWorker(
             self.cfg,
             self.strategy,
@@ -249,10 +253,17 @@ class MainWindow(QMainWindow):
 
     # ── Event routing ──────────────────────────────────────────────────────
 
+    def _on_rail_clicked(self, phase: str) -> None:
+        """Rail-click navigation: switch the central view to the clicked phase."""
+        view_key = _PHASE_TO_VIEW.get(phase)
+        if view_key and view_key in self._views:
+            self._stack.setCurrentWidget(self._views[view_key])
+
     def _on_phase_event(self, ev: PhaseEvent) -> None:
         view_key = _PHASE_TO_VIEW.get(ev.phase)
         if view_key:
             self._stack.setCurrentWidget(self._views[view_key])
+            self._rail.select_phase(ev.phase)
 
         if ev.kind is PhaseEventKind.PHASE_START:
             self._rail.set_status(ev.phase, "running")
@@ -358,8 +369,17 @@ class MainWindow(QMainWindow):
                 self._log.append_line(f"  + {sec}")
             if result.aborted_reason:
                 self._log.append_line(f"  reason: {result.aborted_reason}")
-        # Stay on the last phase view (risk for dry-run, verify for real runs).
-        # The persistent banner at the bottom carries the final RESULT.
+        # Auto-jump to the most actionable view if one stands out: verify on
+        # FAIL, pacnew on PACNEW_MERGE_NEEDED. Otherwise stay on the last phase
+        # view (risk for dry-run, verify for real runs).
+        if result.summary:
+            tag = result.summary.tag
+            if tag == "RESULT:VERIFY_FAILED":
+                self._stack.setCurrentWidget(self._views["verify"])
+                self._rail.select_phase("verify")
+            elif tag == "RESULT:PACNEW_MERGE_NEEDED" or result.pacnew_count > 0:
+                self._stack.setCurrentWidget(self._views["pacnew"])
+                self._rail.select_phase("pacnew")
         self._result_banner.show_result(result)
         self._rail.mark_unstarted_skipped()
 

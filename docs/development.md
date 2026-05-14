@@ -33,6 +33,32 @@ archward-gui              # PySide6 GUI
 fixtures under `tests/fixtures/` — see `tests/fixtures/README.md` for the
 regeneration procedure.
 
+## Test-mode environment variables
+
+A small set of env vars is honored for development / regression testing only.
+None are documented in the user-facing README — they exist to make manual
+testing tractable.
+
+| Variable | Effect |
+|---|---|
+| `ARCHWARD_PACNEW_INCLUDE_ALL=1` | `find_pacnew_files()` ignores the `since_epoch` filter; all `.pacnew` files in `/etc` are returned regardless of mtime. Use to exercise PacnewView's per-row buttons against a pre-staged synthetic file without timing the creation between snapshot and pacnew phases. Logs a warning when active so the override isn't silent. |
+
+Example workflow:
+
+```bash
+# Stage a synthetic .pacnew (no real update needed)
+sudo cp /etc/pacman.conf /etc/pacman.conf.pacnew
+
+# Launch the GUI in pacnew-test mode
+ARCHWARD_PACNEW_INCLUDE_ALL=1 ./venv/bin/archward-gui
+
+# Click Run Update — PacnewView will show the synthetic file with all
+# five action buttons. Try View Diff, then Keep Ours / Take New / Edit / Leave.
+
+# Cleanup
+sudo rm -f /etc/pacman.conf.pacnew /etc/pacman.conf.pre-archward.bak
+```
+
 ## Sudo for unattended use (optional)
 
 By default, sudo prompts via askpass (`ksshaskpass` on KDE, etc.) — which
