@@ -6,6 +6,50 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-05-14
+
+### Added
+
+- **Bulk rollback in the Snapshot Browser** — two new actions added to the
+  right panel:
+  - **Restore all configs from this snapshot** — iterates every captured
+    config (sshd_config, pacman.conf, fstab, …), restoring each to its /etc
+    location. Each file gets its own `.pre-rollback.bak` so per-file
+    rollback paths are preserved. Failures don't abort the rest of the
+    operation; the summary lists what succeeded and what didn't.
+  - **Apply all package versions from this snapshot** — single atomic
+    `pacman -U pkg1 pkg2 …` so the package transaction either fully
+    succeeds or fully rolls back. Plan is shown in the confirm modal:
+    per-package current → target diffs, packages skipped (not in cache),
+    boot-critical warnings.
+
+- **Safety net for bulk package apply** — a pre-rollback snapshot is taken
+  automatically before the bulk operation runs, so the rollback-of-rollback
+  path is always available. If the pre-rollback snapshot fails the bulk
+  operation aborts before touching any package.
+
+- **Type-YES confirmation gate** — when the change set includes any
+  boot-critical package (`glibc`, `lib32-glibc`, `systemd`, `systemd-libs`,
+  `openssl`, `lib32-openssl`), a second modal appears requiring the user
+  to type "YES" (uppercase) before pacman is invoked. Getting these wrong
+  can leave the system unbootable; the friction is intentional.
+
+- New `pipeline/rollback.py` primitives:
+  - `BulkResult` dataclass with `changed` / `skipped` / `per_item_results`.
+  - `plan_bulk_package_apply()` computes the change set against current
+    state; returns (changes, skipped) tuples.
+  - `restore_all_configs()` and `apply_all_packages()` are pure functions
+    — UI orchestrates confirmation + pre-snapshot + worker thread.
+  - `BOOT_CRITICAL` frozenset of package names the UI gates on.
+
+### Tests
+
+- 125 unit tests (118 baseline + 7 covering the bulk planner: unchanged
+  skipped, not-in-cache skipped, real changes detected with full tuple
+  shape, boot-critical refusal without override, override actually invokes
+  pacman -U, no-changes bypasses pacman entirely, BOOT_CRITICAL contains
+  the expected name set).
+
 ## [0.2.1] — 2026-05-14
 
 ### Added
@@ -225,7 +269,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/indyfive11/archward/releases/tag/v0.2.2
 [0.2.1]: https://github.com/indyfive11/archward/releases/tag/v0.2.1
 [0.2.0]: https://github.com/indyfive11/archward/releases/tag/v0.2.0
 [0.1.4]: https://github.com/indyfive11/archward/releases/tag/v0.1.4

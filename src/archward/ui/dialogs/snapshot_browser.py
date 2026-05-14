@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -49,14 +50,20 @@ from archward.events import EventBus
 from archward.models.config import ConfigModel
 from archward.pacman import query as pq
 from archward.pipeline.rollback import (
+    BOOT_CRITICAL,
+    BulkResult,
     RollbackOp,
+    apply_all_packages,
     critical_packages_with_kernel_fallback,
     downgrade_package,
     find_package_in_cache,
     list_snapshot_configs,
     parse_critical_packages,
+    plan_bulk_package_apply,
+    restore_all_configs,
     restore_config,
 )
+from archward.pipeline.snapshot import take_snapshot
 from archward.privilege.sudo import SudoStrategy
 from archward.ui.dialogs.diff_dialog import DiffDialog
 from archward.ui.theme import status_palette
@@ -201,14 +208,33 @@ class SnapshotBrowser(QDialog):
         self._pkgs_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._pkgs_tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
+        # Bulk action buttons (each row gets its own granular action; these
+        # are the "do everything at once" shortcuts).
+        self._bulk_configs_btn = QPushButton("Restore all configs from this snapshot…")
+        self._bulk_configs_btn.setToolTip(
+            "Restore every captured config to its /etc location. Each file "
+            "gets a .pre-rollback.bak so per-file rollback is preserved."
+        )
+        self._bulk_configs_btn.clicked.connect(self._on_bulk_restore_configs)
+
+        self._bulk_pkgs_btn = QPushButton("Apply all package versions from this snapshot…")
+        self._bulk_pkgs_btn.setToolTip(
+            "Single atomic `pacman -U` for every package whose snapshot version "
+            "differs from current. Refuses boot-critical packages without a "
+            "Type-YES override."
+        )
+        self._bulk_pkgs_btn.clicked.connect(self._on_bulk_apply_packages)
+
         right_box = QWidget()
         right_layout = QVBoxLayout(right_box)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(self._meta_label)
         right_layout.addWidget(self._configs_label)
         right_layout.addWidget(self._configs_tree, stretch=1)
+        right_layout.addWidget(self._bulk_configs_btn)
         right_layout.addWidget(self._pkgs_label)
         right_layout.addWidget(self._pkgs_tree, stretch=1)
+        right_layout.addWidget(self._bulk_pkgs_btn)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._snap_list)
@@ -525,6 +551,190 @@ class SnapshotBrowser(QDialog):
             display_message = result.message
         self._log_action(display_message)
         self._show_outcome(f"{verb} {pkg_name}", result.success, display_message)
+        if result.success:
+            self._render_detail(snap_path)
+
+    # ── Bulk action handlers ───────────────────────────────────────────────
+
+    def _current_snapshot_path(self) -> Path | None:
+        items = self._snap_list.selectedItems()
+        if not items:
+            return None
+        return items[0].data(Qt.ItemDataRole.UserRole)
+
+    def _on_bulk_restore_configs(self) -> None:
+        snap_path = self._current_snapshot_path()
+        if snap_path is None:
+            return
+        configs = list_snapshot_configs(snap_path)
+        if not configs:
+            QMessageBox.information(
+                self, "Restore all configs", "No configs captured in this snapshot."
+            )
+            return
+
+        body_lines = [
+            f"Restore <b>{len(configs)}</b> config(s) from snapshot "
+            f"<code>{snap_path.name}</code>?<br><br>"
+            "Each file will be backed up to "
+            "<code>&lt;file&gt;.pre-rollback.bak</code> before overwriting, "
+            "so per-file rollback is preserved."
+            "<br><br><b>Files:</b>",
+        ]
+        for live_rel, _ in configs:
+            body_lines.append(f"&nbsp;&nbsp;/{live_rel}")
+        confirm = QMessageBox.question(
+            self,
+            "Restore all configs",
+            "<br>".join(body_lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        self._run_off_thread(
+            fn=lambda: restore_all_configs(snap_path, self._strategy),
+            title="Restore all configs",
+            progress_label=f"Restoring {len(configs)} config(s)…",
+            on_done=lambda result: self._handle_bulk_done(
+                result, snap_path, kind="Restore all configs"
+            ),
+        )
+
+    def _on_bulk_apply_packages(self) -> None:
+        snap_path = self._current_snapshot_path()
+        if snap_path is None:
+            return
+
+        changes, skipped = plan_bulk_package_apply(
+            snap_path,
+            kernel_patterns=tuple(self._cfg.risk.kernel_patterns),
+            kernel_pattern_exclude=tuple(self._cfg.risk.kernel_pattern_exclude),
+        )
+        if not changes:
+            QMessageBox.information(
+                self,
+                "Apply all packages",
+                "Nothing to apply — every captured package is already at its "
+                "snapshot version.",
+            )
+            return
+
+        # Compose a preview of what will change.
+        boot_critical_in_set = sorted(
+            n for n, _c, _t, _p in changes if n in BOOT_CRITICAL
+        )
+        body_lines: list[str] = [
+            f"Apply <b>{len(changes)}</b> package version change(s) "
+            f"from snapshot <code>{snap_path.name}</code>?<br><br>"
+            "This runs a single atomic <code>pacman -U</code> with every "
+            "package as one transaction.<br><br>"
+            "A fresh snapshot of the current state will be taken first so "
+            "you can rollback this rollback if needed."
+            "<br><br><b>Changes:</b>",
+        ]
+        for name, current, target, _path in changes[:25]:
+            body_lines.append(
+                f"&nbsp;&nbsp;{name}:&nbsp;&nbsp;<code>{current}</code> → <code>{target}</code>"
+            )
+        if len(changes) > 25:
+            body_lines.append(f"&nbsp;&nbsp;… and {len(changes) - 25} more")
+        if skipped:
+            body_lines.append(f"<br><b>Skipped ({len(skipped)}):</b>")
+            for name, reason in skipped[:10]:
+                body_lines.append(f"&nbsp;&nbsp;{name} — {reason}")
+            if len(skipped) > 10:
+                body_lines.append(f"&nbsp;&nbsp;… and {len(skipped) - 10} more")
+        if boot_critical_in_set:
+            body_lines.append(
+                "<br><b style='color:#c0392b;'>⚠ Boot-critical packages in set:</b>"
+            )
+            for n in boot_critical_in_set:
+                body_lines.append(f"&nbsp;&nbsp;{n}")
+            body_lines.append(
+                "<br>Downgrading these can leave the system unbootable. "
+                "You will be asked to type YES to confirm."
+            )
+
+        confirm = QMessageBox.question(
+            self,
+            "Apply all packages",
+            "<br>".join(body_lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        # Boot-critical: require Type-YES confirmation as a friction step.
+        include_boot_critical = False
+        if boot_critical_in_set:
+            text, ok = QInputDialog.getText(
+                self,
+                "Confirm boot-critical downgrade",
+                f"You are about to downgrade boot-critical packages:\n"
+                f"  {', '.join(boot_critical_in_set)}\n\n"
+                "Type YES (uppercase) to confirm:",
+            )
+            if not ok or text != "YES":
+                return
+            include_boot_critical = True
+
+        # Auto-snapshot before bulk apply so rollback-of-rollback is possible.
+        self._log_action("taking pre-rollback snapshot")
+        try:
+            pre_snap = take_snapshot(self._cfg, self._strategy, self._bus or EventBus())
+            self._log_action(f"pre-rollback snapshot at {pre_snap.meta.path}")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Pre-rollback snapshot failed",
+                f"Could not take a fresh snapshot before bulk apply:\n\n{e}\n\n"
+                "Aborting — bulk operations require an undo target.",
+            )
+            return
+
+        self._run_off_thread(
+            fn=lambda: apply_all_packages(
+                snap_path,
+                self._strategy,
+                kernel_patterns=tuple(self._cfg.risk.kernel_patterns),
+                kernel_pattern_exclude=tuple(self._cfg.risk.kernel_pattern_exclude),
+                include_boot_critical=include_boot_critical,
+            ),
+            title="Apply all packages",
+            progress_label=f"Running pacman -U on {len(changes)} package(s)…",
+            on_done=lambda result: self._handle_bulk_done(
+                result, snap_path, kind="Apply all packages"
+            ),
+        )
+
+    def _handle_bulk_done(self, result: object, snap_path: Path, kind: str) -> None:
+        if isinstance(result, Exception):
+            self._show_outcome(kind, False, f"Worker error: {result}")
+            return
+        assert isinstance(result, BulkResult)
+        self._log_action(f"{kind}: {result.message}")
+
+        summary_lines = [result.message]
+        if result.changed:
+            summary_lines.append(f"<br><b>Applied ({len(result.changed)}):</b>")
+            for tup in result.changed[:20]:
+                if tup[1] and tup[2]:  # package: (name, from, to)
+                    summary_lines.append(
+                        f"&nbsp;&nbsp;{tup[0]}: <code>{tup[1]}</code> → <code>{tup[2]}</code>"
+                    )
+                else:  # config: (path, "", "")
+                    summary_lines.append(f"&nbsp;&nbsp;{tup[0]}")
+            if len(result.changed) > 20:
+                summary_lines.append(f"&nbsp;&nbsp;… and {len(result.changed) - 20} more")
+        if result.skipped:
+            summary_lines.append(f"<br><b>Skipped ({len(result.skipped)}):</b>")
+            for name, reason in result.skipped[:10]:
+                summary_lines.append(f"&nbsp;&nbsp;{name} — {reason}")
+
+        self._show_outcome(kind, result.success, "<br>".join(summary_lines))
         if result.success:
             self._render_detail(snap_path)
 
