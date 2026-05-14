@@ -48,6 +48,7 @@ from archward.privilege.sudo import SudoStrategy
 from archward.system import notify
 from archward.system.distro import detect_distro
 from archward.ui.dialogs.preferences import PreferencesDialog
+from archward.ui.dialogs.snapshot_browser import SnapshotBrowser
 from archward.ui.log_pane import LogPane
 from archward.ui.phase_rail import PhaseRail
 from archward.ui.prompter import GuiPrompter
@@ -197,6 +198,14 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._update_btn)
 
         toolbar.addSeparator()
+        self._snap_btn = QPushButton("Snapshot Browser…")
+        self._snap_btn.setToolTip(
+            "Browse past snapshots; restore individual configs or downgrade "
+            "specific packages from /var/cache/pacman/pkg/."
+        )
+        self._snap_btn.clicked.connect(self._open_snapshot_browser)
+        toolbar.addWidget(self._snap_btn)
+
         self._prefs_btn = QPushButton("Preferences…")
         self._prefs_btn.clicked.connect(self._open_preferences)
         toolbar.addWidget(self._prefs_btn)
@@ -387,6 +396,16 @@ class MainWindow(QMainWindow):
         notify.notify_completion(result, self.cfg)
 
     # ── Preferences ────────────────────────────────────────────────────────
+
+    def _open_snapshot_browser(self) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            self._status.showMessage("Pipeline running — close it before browsing snapshots.")
+            return
+        # Reuse the active bus if a run produced one (so rollback log lines route
+        # through the same log pane); otherwise the browser falls back to the
+        # logging module.
+        dlg = SnapshotBrowser(self.cfg, self.strategy, self.bus, parent=self)
+        dlg.exec()
 
     def _open_preferences(self) -> None:
         if self.worker is not None and self.worker.isRunning():

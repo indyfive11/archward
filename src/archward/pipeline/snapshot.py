@@ -102,6 +102,8 @@ def _sudo_targz_if_exists(src_dir: Path, dst: Path, strategy: SudoStrategy, mode
 
 
 def _gather_packages(snap_root: Path, cfg: ConfigModel) -> dict[str, Path]:
+    import fnmatch
+
     pkg_dir = snap_root / "packages"
     pkg_dir.mkdir(parents=True, exist_ok=True)
 
@@ -126,11 +128,32 @@ def _gather_packages(snap_root: Path, cfg: ConfigModel) -> dict[str, Path]:
         else "(no updates pending)\n",
     )
 
-    # Critical-package versions — versions of every pkg in [risk].high.
+    # critical.txt is the rollback target list. v0.2.0 fix: kernel packages
+    # match cfg.risk.kernel_patterns (fnmatch) and were previously omitted —
+    # they're matched at runtime by the risk classifier but never recorded
+    # here. Without their pre-update versions in critical.txt, the
+    # SnapshotBrowser can't offer to downgrade them. Now we also iterate
+    # the installed package list and add anything matching a kernel pattern
+    # (minus kernel_pattern_exclude — firmware/docs/tools).
+    high_set = set(cfg.risk.high)
+    kernel_pkgs: list[tuple[str, str]] = []
+    for name, version in all_pkgs:
+        if name in high_set:
+            continue  # already captured in the HIGH iteration below
+        if any(fnmatch.fnmatch(name, pat) for pat in cfg.risk.kernel_pattern_exclude):
+            continue
+        if any(fnmatch.fnmatch(name, pat) for pat in cfg.risk.kernel_patterns):
+            kernel_pkgs.append((name, version))
+
     critical_lines = ["=== Critical package versions pre-update ==="]
     for pkg in cfg.risk.high:
         v = pq.installed_version(pkg)
         critical_lines.append(f"{pkg}: {v if v else 'not installed'}")
+    if kernel_pkgs:
+        critical_lines.append("")
+        critical_lines.append("=== Kernel packages (via kernel_patterns) ===")
+        for name, version in sorted(kernel_pkgs):
+            critical_lines.append(f"{name}: {version}")
     critical_lines.append("")
     critical_lines.append("=== AUR / foreign packages (not tracked by checkupdates) ===")
     critical_lines.extend(f"{n} {v}" for n, v in foreign)

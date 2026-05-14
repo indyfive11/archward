@@ -6,6 +6,45 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-14
+
+### Added
+
+- **Snapshot Browser + granular rollback** (minor bump for new capability).
+  New "Snapshot Browser…" toolbar button opens a modal that lists every
+  snapshot in `general.snapshot_dir` (newest-first with relative age), shows
+  per-snapshot metadata (timestamp, distro, kernel-at-snapshot, AUR helper),
+  and provides per-file / per-package rollback actions.
+
+  Two action types:
+  - **Restore config** — copies a snapshot config back to its `/etc` location.
+    Backs up the live file to `<file>.pre-rollback.bak` first, then preserves
+    the *current* file's ownership and mode on the restored copy (so a
+    snapshot taken when sshd_config was 644 doesn't loosen a since-hardened
+    600 file).
+  - **Downgrade package** — runs `sudo pacman -U <cached pkg>` for the
+    snapshot's version, sourced from `/var/cache/pacman/pkg/`. Refuses to
+    act if the requested version isn't already cached (no network fetch).
+    Boot-critical packages (glibc / systemd / openssl) and kernel downgrades
+    get an extra-loud confirm-modal warning.
+
+- New `pipeline/rollback.py` with `RollbackOp` / `RollbackResult` dataclasses,
+  `restore_config`, `downgrade_package`, `find_package_in_cache`,
+  `parse_critical_packages`, `list_snapshot_configs`. Shaped so v0.2.1's
+  bulk variants (`restore_all_configs`, `downgrade_critical`) are just
+  iteration.
+
+- DiffDialog reuse: "View Diff" on a snapshot config opens a unified-diff
+  modal of the current `/etc` file vs the snapshot's copy (theme-aware
+  highlighting from v0.1.4).
+
+### Tests
+
+- 107 unit tests (97 baseline + 10 covering rollback primitives:
+  critical.txt parsing, config-filename mapping, cache lookup with
+  exact-name boundary, version-not-cached fallback, suffix variants
+  (.zst/.xz/.gz), RollbackOp immutability).
+
 ## [0.1.4] — 2026-05-14
 
 ### Added
@@ -159,7 +198,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/indyfive11/archward/releases/tag/v0.2.0
 [0.1.4]: https://github.com/indyfive11/archward/releases/tag/v0.1.4
 [0.1.3]: https://github.com/indyfive11/archward/releases/tag/v0.1.3
 [0.1.2]: https://github.com/indyfive11/archward/releases/tag/v0.1.2
