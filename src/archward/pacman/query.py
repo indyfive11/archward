@@ -154,6 +154,34 @@ def preview_transaction() -> TransactionPreview:
     )
 
 
+def vercmp(a: str, b: str) -> int:
+    """Compare two pacman version strings using pacman's `vercmp`.
+
+    Returns:
+        -1, 0, or 1 for a<b, a==b, a>b. Honors epoch prefixes (`1:`), pkgrel
+        suffixes (`-1`, `-1.2`), alpha/beta/rc tokens — same rules pacman
+        uses internally for dependency resolution and upgrade ordering.
+
+    Falls back to lexical comparison if the `vercmp` binary is somehow
+    unavailable (it ships with pacman, so this is mostly defensive).
+    """
+    code, out, _ = _run(["vercmp", a, b])
+    if code != 0:
+        if a == b:
+            return 0
+        return -1 if a < b else 1
+    try:
+        result = int(out.strip())
+    except ValueError:
+        return 0
+    # vercmp returns the raw difference; normalize to -1/0/+1.
+    if result < 0:
+        return -1
+    if result > 0:
+        return 1
+    return 0
+
+
 def scan_pacman_log(since_epoch: int, max_lines: int = 500) -> tuple[int, int, list[str]]:
     """Tail /var/log/pacman.log, count [ALPM] error/warning entries newer than `since_epoch`.
 

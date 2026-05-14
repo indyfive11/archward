@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSplitter,
     QTreeWidget,
@@ -81,6 +82,33 @@ def _read_first_line(path: Path) -> str:
             return f.readline().strip()
     except OSError:
         return ""
+
+
+class _RollbackWorker(QThread):
+    """Runs one rollback callable (restore_config or downgrade_package) off the
+    main thread so the GUI stays responsive while `pacman -U` or the file
+    operations finish. Emits the function's return value (a `RollbackResult`)
+    on completion.
+
+    Cancellation isn't supported — these operations are short (seconds) and
+    interrupting `pacman -U` mid-transaction is unsafe by the same logic
+    that keeps the main pipeline from killing pacman during updates.
+    """
+
+    finished_with_result = Signal(object)
+
+    def __init__(self, fn: Callable[[], object], parent=None) -> None:
+        super().__init__(parent)
+        self._fn = fn
+        self.result = None  # populated before the signal fires
+
+    def run(self) -> None:
+        try:
+            self.result = self._fn()
+        except Exception as e:  # noqa: BLE001 — must catch all so the QThread doesn't die silently
+            log.exception("rollback worker raised")
+            self.result = e
+        self.finished_with_result.emit(self.result)
 
 
 def _capture_status(snap_file: Path, live_path: Path) -> tuple[str, str]:
@@ -348,7 +376,11 @@ class SnapshotBrowser(QDialog):
                 self._pkgs_tree.setItemWidget(item, 3, action_widget)
                 continue
 
-            # Different — offer downgrade if cached.
+            # Different — offer the rollback if cached. The verb reflects
+            # direction: "Downgrade" when the snapshot's version is older
+            # than current, "Upgrade" when it's newer (post-rollback state
+            # where you want to restore the current latest from a snapshot
+            # taken before the previous rollback). pacman -U handles both.
             cache_path = find_package_in_cache(name, snap_version)
             actions = self._row_widget()
             if cache_path is None:
@@ -356,10 +388,12 @@ class SnapshotBrowser(QDialog):
                 lbl.setStyleSheet("color: palette(text); font-style: italic; padding-left: 6px;")
                 actions.layout().addWidget(lbl)
             else:
-                btn = self._small_btn(f"Downgrade to {snap_version}")
+                cmp = pq.vercmp(current, snap_version)
+                verb = "Downgrade" if cmp > 0 else "Upgrade"
+                btn = self._small_btn(f"{verb} to {snap_version}")
                 btn.clicked.connect(
                     lambda *, n=name, v=snap_version, c=current, sp=snap_path:
-                    self._on_downgrade(n, v, c, sp)
+                    self._on_apply_pkg_version(n, v, c, sp)
                 )
                 actions.layout().addWidget(btn)
             actions.layout().addStretch(1)
@@ -394,33 +428,59 @@ class SnapshotBrowser(QDialog):
             to_version=None,
             snapshot_path=snap_path,
         )
-        result = restore_config(op, snap_file, self._strategy)
+        self._run_off_thread(
+            fn=lambda: restore_config(op, snap_file, self._strategy),
+            title="Restore config",
+            progress_label=f"Restoring {live_target} from snapshot…",
+            on_done=lambda result: self._handle_restore_done(result, snap_path),
+        )
+
+    def _handle_restore_done(self, result, snap_path: Path) -> None:
+        if isinstance(result, Exception):
+            self._show_outcome("Restore config", False, f"Worker error: {result}")
+            return
         self._log_action(result.message)
         self._show_outcome("Restore config", result.success, result.message)
+        if result.success:
+            # Re-render to update the capture-status indicator (file may
+            # now be identical/different from live again).
+            self._render_detail(snap_path)
 
-    def _on_downgrade(
+    def _on_apply_pkg_version(
         self, pkg_name: str, snap_version: str, current: str, snap_path: Path
     ) -> None:
-        # Extra-loud warning for boot-critical packages.
+        """Apply a package version from the snapshot — direction-aware.
+
+        Uses vercmp to decide whether it's a downgrade (current > snap) or
+        upgrade (current < snap). The boot-critical / kernel warnings only
+        fire for downgrades; upgrading to a newer version is generally safer.
+        """
+        is_downgrade = pq.vercmp(current, snap_version) > 0
+        verb = "Downgrade" if is_downgrade else "Upgrade"
+        verb_past = "downgraded" if is_downgrade else "upgraded"
+
+        # Extra-loud warning ONLY for downgrades of boot-critical / kernel
+        # packages — upgrading toward current latest is safe in those cases.
         BOOT_CRITICAL = {"glibc", "systemd", "systemd-libs", "openssl"}
         is_kernel = pkg_name.startswith("linux") and not pkg_name.endswith(("firmware", "docs"))
         warning = ""
-        if pkg_name in BOOT_CRITICAL:
+        if is_downgrade and pkg_name in BOOT_CRITICAL:
             warning = (
                 f"<br><br><b style='color:#c0392b;'>⚠ {pkg_name} is boot-critical.</b> "
                 "If this downgrade leaves the system unbootable you may need "
                 "to chroot from a USB to recover."
             )
-        elif is_kernel:
+        elif is_downgrade and is_kernel:
             warning = (
                 "<br><br><b style='color:#c0392b;'>⚠ Kernel downgrade.</b> "
                 "Reboot will be required. If the older kernel fails to boot, "
                 "use your bootloader's previous-entry menu to recover."
             )
+
         confirm = QMessageBox.question(
             self,
-            f"Downgrade {pkg_name}",
-            f"Downgrade <b>{pkg_name}</b>:<br><br>"
+            f"{verb} {pkg_name}",
+            f"{verb} <b>{pkg_name}</b>:<br><br>"
             f"&nbsp;&nbsp;current: <code>{current}</code><br>"
             f"&nbsp;&nbsp;target: <code>{snap_version}</code> (from snapshot)<br>"
             f"&nbsp;&nbsp;source: <code>/var/cache/pacman/pkg/</code><br>"
@@ -432,18 +492,78 @@ class SnapshotBrowser(QDialog):
         if confirm != QMessageBox.StandardButton.Yes:
             return
         op = RollbackOp(
-            kind="downgrade_package",
+            kind="downgrade_package",  # internal kind label — pacman -U covers both directions
             target=pkg_name,
             from_version=current,
             to_version=snap_version,
             snapshot_path=snap_path,
         )
-        result = downgrade_package(op, self._strategy)
-        self._log_action(result.message)
-        self._show_outcome(f"Downgrade {pkg_name}", result.success, result.message)
+        self._run_off_thread(
+            fn=lambda: downgrade_package(op, self._strategy),
+            title=f"{verb} {pkg_name}",
+            progress_label=f"Running pacman -U on {pkg_name} {snap_version}…",
+            on_done=lambda result: self._handle_pkg_apply_done(
+                result, pkg_name, snap_version, verb, verb_past, snap_path
+            ),
+        )
+
+    def _handle_pkg_apply_done(
+        self,
+        result,
+        pkg_name: str,
+        snap_version: str,
+        verb: str,
+        verb_past: str,
+        snap_path: Path,
+    ) -> None:
+        if isinstance(result, Exception):
+            self._show_outcome(f"{verb} {pkg_name}", False, f"Worker error: {result}")
+            return
         if result.success:
-            # Re-render so current versions refresh.
+            display_message = f"{verb_past} {pkg_name} to {snap_version}"
+        else:
+            display_message = result.message
+        self._log_action(display_message)
+        self._show_outcome(f"{verb} {pkg_name}", result.success, display_message)
+        if result.success:
             self._render_detail(snap_path)
+
+    # ── Off-thread runner with progress dialog ─────────────────────────────
+
+    def _run_off_thread(
+        self,
+        *,
+        fn: Callable[[], object],
+        title: str,
+        progress_label: str,
+        on_done: Callable[[object], None],
+    ) -> None:
+        """Run `fn` on a _RollbackWorker, show an indeterminate QProgressDialog
+        until it finishes, then dispatch the result to `on_done` on the main
+        thread.
+
+        Keeps the GUI responsive while pacman -U or the file ops run. The
+        progress dialog has no Cancel button — these operations should not
+        be interrupted mid-flight.
+        """
+        progress = QProgressDialog(progress_label, "", 0, 0, self)
+        progress.setWindowTitle(title)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.show()
+
+        worker = _RollbackWorker(fn, parent=self)
+
+        def _on_finished(result: object) -> None:
+            progress.close()
+            on_done(result)
+            worker.deleteLater()
+
+        worker.finished_with_result.connect(_on_finished)
+        worker.start()
 
     # ── Helpers ────────────────────────────────────────────────────────────
 

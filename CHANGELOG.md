@@ -6,6 +6,33 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-14
+
+### Added
+
+- **Direction-aware package rollback actions** — SnapshotBrowser now labels
+  the action button `Upgrade to X` when the snapshot's version is newer than
+  the currently-installed one and `Downgrade to X` when it's older. Modal
+  title, confirmation body, and log line all match. Boot-critical /
+  kernel-downgrade warnings only fire on actual downgrades. Direction is
+  computed via a new `pacman.query.vercmp()` wrapper around the `vercmp`
+  binary that ships with pacman (handles epoch prefixes, pkgrel suffixes,
+  same rules pacman uses for dependency resolution).
+
+- **Non-blocking rollback actions** — `_RollbackWorker(QThread)` now runs
+  restore_config and downgrade_package off the main thread. A
+  QProgressDialog with an indeterminate spinner appears while pacman -U or
+  the file ops are running so the GUI no longer freezes for the few seconds
+  the operation takes. No Cancel button: interrupting pacman -U mid-flight
+  is unsafe by the same logic that keeps the main pipeline from killing
+  pacman during updates.
+
+### Tests
+
+- 118 unit tests (112 baseline + 6 covering vercmp: a<b, a>b, equal, pkgrel
+  bump, epoch trump, plain dotted versions; gracefully skipped if the
+  vercmp binary isn't on PATH).
+
 ## [0.2.0] — 2026-05-14
 
 ### Added
@@ -198,7 +225,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/indyfive11/archward/releases/tag/v0.2.1
 [0.2.0]: https://github.com/indyfive11/archward/releases/tag/v0.2.0
 [0.1.4]: https://github.com/indyfive11/archward/releases/tag/v0.1.4
 [0.1.3]: https://github.com/indyfive11/archward/releases/tag/v0.1.3
