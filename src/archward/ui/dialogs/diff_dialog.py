@@ -30,35 +30,41 @@ from PySide6.QtWidgets import (
 
 from archward.pacman.runner import run_capture
 from archward.privilege.sudo import SudoStrategy
+from archward.ui.theme import status_palette
 
 log = logging.getLogger(__name__)
 
 
 class _DiffHighlighter(QSyntaxHighlighter):
-    """Color-code unified-diff lines: red removals, green additions, gray hunks."""
+    """Color-code unified-diff lines: red removals, green additions, gray hunks.
+
+    Colors pulled from the active theme so the highlighter remains readable on
+    both light and dark themes (Breeze, Breeze Dark, etc.).
+    """
 
     def __init__(self, parent: QTextDocument) -> None:
         super().__init__(parent)
         self._rules: list[tuple[QRegularExpression, QTextCharFormat]] = []
+        p = status_palette()
 
         fmt_add = QTextCharFormat()
-        fmt_add.setForeground(QColor("#155724"))
-        fmt_add.setBackground(QColor("#d4edda"))
+        fmt_add.setForeground(p.diff_add_fg)
+        fmt_add.setBackground(p.diff_add_bg)
         # `+++` is the file header; `+` starting a line is an addition.
         self._rules.append((QRegularExpression(r"^\+(?!\+\+).*$"), fmt_add))
 
         fmt_del = QTextCharFormat()
-        fmt_del.setForeground(QColor("#721c24"))
-        fmt_del.setBackground(QColor("#f8d7da"))
+        fmt_del.setForeground(p.diff_del_fg)
+        fmt_del.setBackground(p.diff_del_bg)
         self._rules.append((QRegularExpression(r"^-(?!--).*$"), fmt_del))
 
         fmt_hunk = QTextCharFormat()
-        fmt_hunk.setForeground(QColor("#6c757d"))
+        fmt_hunk.setForeground(p.diff_hunk_fg)
         fmt_hunk.setFontWeight(QFont.Weight.Bold)
         self._rules.append((QRegularExpression(r"^@@.*@@.*$"), fmt_hunk))
 
         fmt_header = QTextCharFormat()
-        fmt_header.setForeground(QColor("#383d41"))
+        fmt_header.setForeground(p.diff_header_fg)
         fmt_header.setFontWeight(QFont.Weight.Bold)
         self._rules.append((QRegularExpression(r"^(?:\+{3}|-{3}) .*$"), fmt_header))
 

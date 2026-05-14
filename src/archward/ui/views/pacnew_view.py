@@ -37,14 +37,18 @@ from archward.models.pacnew import PacnewAction, PacnewFile, PacnewRecommendatio
 from archward.pacman.pacnew import apply_action
 from archward.privilege.sudo import SudoStrategy
 from archward.ui.dialogs.diff_dialog import DiffDialog
+from archward.ui.theme import status_palette
 
 log = logging.getLogger(__name__)
 
-_REC_COLORS = {
-    PacnewRecommendation.KEEP_OURS: QColor(80, 180, 100),
-    PacnewRecommendation.TAKE_NEW: QColor(80, 130, 200),
-    PacnewRecommendation.REVIEW_NEEDED: QColor(220, 170, 60),
-}
+
+def _rec_colors() -> dict[PacnewRecommendation, QColor]:
+    p = status_palette()
+    return {
+        PacnewRecommendation.KEEP_OURS: p.keep_ours_fg,
+        PacnewRecommendation.TAKE_NEW: p.take_new_fg,
+        PacnewRecommendation.REVIEW_NEEDED: p.review_needed_fg,
+    }
 
 # Graphical merge tools, preferred order. Each takes "<orig> <new>" arguments.
 _MERGE_TOOLS = ("meld", "kdiff3", "kompare")
@@ -116,7 +120,7 @@ class PacnewView(QWidget):
                 "",  # actions placeholder
             ]
         )
-        color = _REC_COLORS.get(pacnew.recommendation)
+        color = _rec_colors().get(pacnew.recommendation)
         if color is not None:
             item.setForeground(1, color)
         self._tree.addTopLevelItem(item)
@@ -164,7 +168,7 @@ class PacnewView(QWidget):
             apply_action(pacnew, action, self._strategy)
         except RuntimeError as e:
             QMessageBox.critical(self, "Action failed", f"{action.value} on {pacnew.path}:\n\n{e}")
-            self._mark_status(item, "FAILED", QColor(220, 70, 70))
+            self._mark_status(item, "FAILED", status_palette().fail_fg)
             return
         self._mark_resolved(item, action)
 
@@ -200,7 +204,7 @@ class PacnewView(QWidget):
             QMessageBox.critical(self, "Edit failed", f"Could not launch {tool}: {e}")
             return
         self._log(f"launched {tool} on {pacnew.original_path} vs {pacnew.path}")
-        self._mark_status(item, "editing (external)", QColor(80, 130, 200))
+        self._mark_status(item, "editing (external)", status_palette().take_new_fg)
 
     # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -211,7 +215,7 @@ class PacnewView(QWidget):
             PacnewAction.LEAVE: "left in place",
             PacnewAction.EDIT: "edited",
         }
-        self._mark_status(item, labels.get(action, action.value), QColor(80, 180, 100))
+        self._mark_status(item, labels.get(action, action.value), status_palette().pass_fg)
         # Disable the row's buttons so the user doesn't double-apply.
         actions_widget = self._tree.itemWidget(item, 4)
         if actions_widget is not None:

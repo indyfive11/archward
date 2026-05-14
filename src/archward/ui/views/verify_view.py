@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
@@ -14,12 +13,16 @@ from PySide6.QtWidgets import (
 )
 
 from archward.models.verify import CheckStatus, VerifyResult
+from archward.ui.theme import status_palette
 
-_STATUS_COLORS = {
-    CheckStatus.PASS: QColor(80, 180, 100),
-    CheckStatus.WARN: QColor(220, 170, 60),
-    CheckStatus.FAIL: QColor(220, 70, 70),
-}
+
+def _status_colors():
+    p = status_palette()
+    return {
+        CheckStatus.PASS: p.pass_fg,
+        CheckStatus.WARN: p.warn_fg,
+        CheckStatus.FAIL: p.fail_fg,
+    }
 
 
 class VerifyView(QWidget):
@@ -47,6 +50,8 @@ class VerifyView(QWidget):
             f"{'reboot needed' if result.reboot_needed else 'no reboot'}"
         )
 
+        colors = _status_colors()
+
         # Group by bucket.
         buckets: dict[str, list] = {"universal": [], "services": []}
         for c in result.checks:
@@ -61,7 +66,7 @@ class VerifyView(QWidget):
             group.setFont(0, font)
             for c in checks:
                 child = QTreeWidgetItem([c.name, c.status.value.upper(), c.message])
-                color = _STATUS_COLORS.get(c.status)
+                color = colors.get(c.status)
                 if color is not None:
                     child.setForeground(1, color)
                 if c.detail:

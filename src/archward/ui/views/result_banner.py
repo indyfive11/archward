@@ -12,16 +12,31 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from archward.pipeline.pipeline import PipelineResult
+from archward.ui.theme import status_palette
 
-# Tag → (background, foreground, human label).
-_TAG_STYLE = {
-    "RESULT:SUCCESS": ("#d4edda", "#155724", "Success"),
-    "RESULT:REBOOT_NEEDED": ("#fff3cd", "#856404", "Reboot Needed"),
-    "RESULT:PACNEW_MERGE_NEEDED": ("#fff3cd", "#856404", "Pacnew Merge Needed"),
-    "RESULT:NEEDS_REVIEW": ("#fff3cd", "#856404", "Needs Review"),
-    "RESULT:VERIFY_FAILED": ("#f8d7da", "#721c24", "Verify Failed"),
-    "RESULT:UPDATE_FAILED": ("#f8d7da", "#721c24", "Update Failed"),
+
+# Tag → (severity_key, human label). The actual bg/fg colors are pulled from
+# the active theme via status_palette() at render time so dark/light themes
+# render appropriately.
+_TAG_INFO = {
+    "RESULT:SUCCESS": ("success", "Success"),
+    "RESULT:REBOOT_NEEDED": ("info", "Reboot Needed"),
+    "RESULT:PACNEW_MERGE_NEEDED": ("info", "Pacnew Merge Needed"),
+    "RESULT:NEEDS_REVIEW": ("info", "Needs Review"),
+    "RESULT:VERIFY_FAILED": ("danger", "Verify Failed"),
+    "RESULT:UPDATE_FAILED": ("danger", "Update Failed"),
 }
+
+
+def _colors_for(severity: str) -> tuple[str, str]:
+    """Return (bg, fg) CSS strings for a severity key from the active theme."""
+    p = status_palette()
+    return {
+        "success": (p.success_bg, p.success_fg),
+        "info": (p.info_bg, p.info_fg),
+        "danger": (p.danger_bg, p.danger_fg),
+        "neutral": (p.neutral_bg, p.neutral_fg),
+    }.get(severity, (p.neutral_bg, p.neutral_fg))
 
 
 class ResultBanner(QWidget):
@@ -46,19 +61,21 @@ class ResultBanner(QWidget):
         if result.summary is None:
             self._label.setText("Pipeline produced no summary")
             self._detail.setText(result.aborted_reason or "")
-            self._apply_style("#e2e3e5", "#383d41")
+            bg, fg = _colors_for("neutral")
+            self._apply_style(bg, fg)
             self.setVisible(True)
             return
 
         tag = result.summary.tag
-        bg, fg, human = _TAG_STYLE.get(tag, ("#e2e3e5", "#383d41", tag))
+        severity, human = _TAG_INFO.get(tag, ("neutral", tag))
+        bg, fg = _colors_for(severity)
         self._label.setText(human)
         self._apply_style(bg, fg)
 
         # Right-side detail: a compact one-liner of the most relevant context.
         bits: list[str] = []
         for sec in result.summary.secondary_tags:
-            _bg2, _fg2, sec_human = _TAG_STYLE.get(sec, (None, None, sec))
+            _sev2, sec_human = _TAG_INFO.get(sec, ("neutral", sec))
             bits.append(f"+ {sec_human}")
         if result.summary.fail_count or result.summary.warn_count:
             bits.append(

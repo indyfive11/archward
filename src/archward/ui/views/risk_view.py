@@ -9,7 +9,7 @@ is handled via the GuiPrompter modal.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
@@ -20,10 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from archward.models.update import PendingUpdate, RiskLevel
-
-_HIGH_COLOR = QColor(220, 70, 70)
-_MEDIUM_COLOR = QColor(220, 170, 60)
-_KERNEL_COLOR = QColor(245, 130, 60)
+from archward.ui.theme import status_palette
 
 
 class RiskView(QWidget):
@@ -33,9 +30,13 @@ class RiskView(QWidget):
         self._summary.setStyleSheet("font-weight: bold; padding: 8px;")
         self._counts = QLabel("")
         self._counts.setStyleSheet("padding: 0 8px 8px 8px;")
+        p = status_palette()
         self._preview_banner = QLabel("")
         self._preview_banner.setStyleSheet(
-            "padding: 4px 8px; background: #fff3cd; border: 1px solid #ffeeba; color: #856404;"
+            f"padding: 4px 8px; "
+            f"background: {p.preview_warning_bg}; "
+            f"border: 1px solid {p.preview_warning_border}; "
+            f"color: {p.preview_warning_fg};"
         )
         self._preview_banner.setVisible(False)
         self._preview_banner.setWordWrap(True)
@@ -70,9 +71,10 @@ class RiskView(QWidget):
             f"{len(by_risk[RiskLevel.MEDIUM])} MEDIUM · {len(by_risk[RiskLevel.LOW])} LOW"
         )
 
+        palette = status_palette()
         for level, label, color in (
-            (RiskLevel.HIGH, "HIGH RISK", _HIGH_COLOR),
-            (RiskLevel.MEDIUM, "MEDIUM RISK", _MEDIUM_COLOR),
+            (RiskLevel.HIGH, "HIGH RISK", palette.high_fg),
+            (RiskLevel.MEDIUM, "MEDIUM RISK", palette.medium_fg),
             (RiskLevel.LOW, "LOW RISK", None),
         ):
             packages = by_risk[level]
@@ -84,13 +86,13 @@ class RiskView(QWidget):
             group.setFont(0, font)
             if color is not None:
                 group.setForeground(0, color)
-            for p in packages:
-                tag = " [kernel]" if p.is_kernel else f" [{p.source}]" if p.source == "aur" else ""
+            for pu in packages:
+                tag = " [kernel]" if pu.is_kernel else f" [{pu.source}]" if pu.source == "aur" else ""
                 child = QTreeWidgetItem(
-                    [p.name, f"{p.old_version} → {p.new_version}", (p.reason or "") + tag]
+                    [pu.name, f"{pu.old_version} → {pu.new_version}", (pu.reason or "") + tag]
                 )
-                if p.is_kernel:
-                    child.setForeground(0, _KERNEL_COLOR)
+                if pu.is_kernel:
+                    child.setForeground(0, palette.kernel_fg)
                 group.addChild(child)
             self._tree.addTopLevelItem(group)
         self._tree.expandAll()

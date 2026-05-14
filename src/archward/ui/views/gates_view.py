@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
@@ -14,13 +13,18 @@ from PySide6.QtWidgets import (
 )
 
 from archward.models.gate import GateResult, GateStatus
+from archward.ui.theme import status_palette
 
-_STATUS_COLORS = {
-    GateStatus.PASS: QColor(80, 180, 100),
-    GateStatus.WARN: QColor(220, 170, 60),
-    GateStatus.FAIL: QColor(220, 70, 70),
-    GateStatus.SKIPPED: QColor(160, 160, 160),
-}
+
+def _status_colors():
+    """Resolve the active theme's GateStatus → QColor mapping at call time."""
+    p = status_palette()
+    return {
+        GateStatus.PASS: p.pass_fg,
+        GateStatus.WARN: p.warn_fg,
+        GateStatus.FAIL: p.fail_fg,
+        GateStatus.SKIPPED: p.skipped_fg,
+    }
 
 
 class GatesView(QWidget):
@@ -43,9 +47,10 @@ class GatesView(QWidget):
 
     def set_results(self, results: list[GateResult]) -> None:
         self._tree.clear()
+        colors = _status_colors()
         for r in results:
             item = QTreeWidgetItem([r.name, r.status.value.upper(), r.message])
-            color = _STATUS_COLORS.get(r.status)
+            color = colors.get(r.status)
             if color is not None:
                 item.setForeground(1, color)
             if r.detail:

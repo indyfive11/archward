@@ -6,6 +6,31 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-05-14
+
+### Added
+
+- **Dark theme aware colors** across all phase views, result banner, and
+  diff highlighter. Earlier releases used hard-coded Bootstrap-alert hex
+  literals (`#155724` dark green, `#fff3cd` light amber, `#f8d7da` light
+  pink) tuned for light themes; under Breeze Dark / Adwaita Dark those
+  read as near-black on dark green or near-white on dark backgrounds.
+- New `ui/theme.py` module exposing `is_dark_theme()` (YIQ luminance of
+  active `QPalette.Window` color, integer math for boundary precision)
+  and `status_palette()` returning a `StatusPalette` dataclass with
+  light/dark variants of every status color (pass/warn/fail/skipped,
+  high/medium/kernel risk, pacnew recommendations, result banner bg/fg
+  pairs, diff add/del/hunk).
+- Views and the result banner consume `status_palette()` at construction
+  time. Theme switch mid-session won't repaint live widgets — restart
+  archward to pick up the new colors.
+
+### Tests
+
+- 97 unit tests (89 baseline + 8 theme tests covering luminance threshold
+  boundaries, palette selection on dark vs light, light/dark palette
+  field parity, and no-QApplication fallback).
+
 ## [0.1.3] — 2026-05-14
 
 ### Added
@@ -134,7 +159,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/indyfive11/archward/releases/tag/v0.1.4
 [0.1.3]: https://github.com/indyfive11/archward/releases/tag/v0.1.3
 [0.1.2]: https://github.com/indyfive11/archward/releases/tag/v0.1.2
 [0.1.1]: https://github.com/indyfive11/archward/releases/tag/v0.1.1
