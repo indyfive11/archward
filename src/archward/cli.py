@@ -258,7 +258,8 @@ def main_gui() -> int:
     from archward.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
-    app.setApplicationName("archward")
+    app.setApplicationName("archward")            # unix identity — used for QSettings paths
+    app.setApplicationDisplayName("Archward")     # human-readable name shown in title bars
     app.setOrganizationName("archward")
 
     window = MainWindow()

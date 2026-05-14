@@ -122,7 +122,7 @@ class PipelineWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("archward")
+        self.setWindowTitle("Archward")
         self.resize(1200, 800)
 
         # ── State ──────────────────────────────────────────────────────────

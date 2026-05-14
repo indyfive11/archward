@@ -6,6 +6,17 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-05-14
+
+### Added
+
+- **Inline help text on Preferences fields.** Every editable field on
+  General / Gates / Risk / Services / Pacnew / AUR / Pacman / Verify /
+  Privilege now has a small gray help label explaining what it does and what
+  the consequences of changing it are. Strings live in a new
+  `ui/dialogs/help_text.py` keyed by `(section, field)` so the copy is
+  centralized and easy to update.
+
 ## [0.1.1] — 2026-05-14
 
 ### Added
@@ -100,6 +111,7 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/indyfive11/archward/releases/tag/v0.1.2
 [0.1.1]: https://github.com/indyfive11/archward/releases/tag/v0.1.1
 [0.1.0]: https://github.com/indyfive11/archward/releases/tag/v0.1.0

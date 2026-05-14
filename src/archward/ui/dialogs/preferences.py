@@ -64,6 +64,7 @@ from archward.models.config import (
     ServicesConfig,
     VerifyConfig,
 )
+from archward.ui.dialogs import help_text
 
 log = logging.getLogger(__name__)
 
@@ -125,10 +126,10 @@ class _GeneralTab(_Tab):
         log_row.addWidget(log_browse)
 
         form = QFormLayout(self)
-        form.addRow("Snapshot directory:", _wrap(snapshot_row))
-        form.addRow("Keep N snapshots:", self._keep_snapshots)
-        form.addRow("Log directory:", _wrap(log_row))
-        form.addRow("Keep N log files:", self._keep_logs)
+        form.addRow("Snapshot directory:", _field_with_help(_wrap(snapshot_row), "general", "snapshot_dir"))
+        form.addRow("Keep N snapshots:", _field_with_help(self._keep_snapshots, "general", "keep_snapshots"))
+        form.addRow("Log directory:", _field_with_help(_wrap(log_row), "general", "log_dir"))
+        form.addRow("Keep N log files:", _field_with_help(self._keep_logs, "general", "keep_logs"))
 
     def _browse(self, target: QLineEdit) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Choose directory", target.text())
@@ -164,9 +165,9 @@ class _GatesTab(_Tab):
         self._allow_override = QCheckBox("Allow override on recoverable gate failures")
 
         form = QFormLayout(self)
-        form.addRow("Snapshot max age:", self._max_age)
-        form.addRow("Minimum free disk on /:", self._min_disk)
-        form.addRow("", self._allow_override)
+        form.addRow("Snapshot max age:", _field_with_help(self._max_age, "gates", "snapshot_max_age_minutes"))
+        form.addRow("Minimum free disk on /:", _field_with_help(self._min_disk, "gates", "min_disk_gb"))
+        form.addRow("", _field_with_help(self._allow_override, "gates", "allow_override"))
 
     def load(self, cfg: ConfigModel) -> None:
         self._max_age.setValue(cfg.gates.snapshot_max_age_minutes)
@@ -191,11 +192,24 @@ class _RiskTab(_Tab):
         self._kernel_patterns = _make_list_edit()
         self._kernel_excludes = _make_list_edit()
 
-        form = QFormLayout(self)
-        form.addRow(_lbl("HIGH-risk packages (exact match, one per line):"), self._high)
-        form.addRow(_lbl("MEDIUM patterns (fnmatch glob, one per line):"), self._medium_patterns)
-        form.addRow(_lbl("Kernel patterns (fnmatch, → HIGH + is_kernel):"), self._kernel_patterns)
-        form.addRow(_lbl("Kernel pattern excludes (e.g. linux-firmware*):"), self._kernel_excludes)
+        layout = QVBoxLayout(self)
+        section_help = _section_help("risk")
+        if section_help is not None:
+            layout.addWidget(section_help)
+
+        form = QFormLayout()
+        form.addRow(_lbl("HIGH-risk packages (exact match, one per line):"),
+                    _field_with_help(self._high, "risk", "high"))
+        form.addRow(_lbl("MEDIUM patterns (fnmatch glob, one per line):"),
+                    _field_with_help(self._medium_patterns, "risk", "medium_patterns"))
+        form.addRow(_lbl("Kernel patterns (fnmatch, → HIGH + is_kernel):"),
+                    _field_with_help(self._kernel_patterns, "risk", "kernel_patterns"))
+        form.addRow(_lbl("Kernel pattern excludes (e.g. linux-firmware*):"),
+                    _field_with_help(self._kernel_excludes, "risk", "kernel_pattern_exclude"))
+
+        form_wrap = QWidget()
+        form_wrap.setLayout(form)
+        layout.addWidget(form_wrap, stretch=1)
 
     def load(self, cfg: ConfigModel) -> None:
         self._high.setPlainText(_tuple_to_lines(cfg.risk.high))
@@ -237,8 +251,14 @@ class _ServicesTab(_Tab):
         layout = QVBoxLayout(self)
         layout.addWidget(_lbl("Services to verify (one per line; default severity is 'critical'):"))
         layout.addWidget(self._to_verify, stretch=2)
+        services_help = _help_label(help_text.get("services", "to_verify"))
+        if services_help.text():
+            layout.addWidget(services_help)
         layout.addWidget(_lbl("Per-unit severity overrides:"))
         layout.addWidget(self._severity, stretch=1)
+        severity_help = _help_label(help_text.get("services", "severity"))
+        if severity_help.text():
+            layout.addWidget(severity_help)
         layout.addLayout(btn_row)
 
     def _remove_selected_severity(self) -> None:
@@ -285,15 +305,14 @@ class _PacnewTab(_Tab):
         self._tree.setSelectionMode(QTreeWidget.SelectionMode.NoSelection)
         self._tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        hint = QLabel(
+        hint = _help_label(
             "Pacnew rules are edited by hand in config.toml. Use the Advanced "
             "tab's 'Open config.toml' to launch your editor."
         )
-        hint.setStyleSheet("color: #6c757d;")
-        hint.setWordWrap(True)
 
         form_top = QFormLayout()
-        form_top.addRow("Default strategy:", self._default)
+        form_top.addRow("Default strategy:",
+                        _field_with_help(self._default, "pacnew", "default_strategy"))
 
         layout = QVBoxLayout(self)
         layout.addLayout(form_top)
@@ -334,9 +353,12 @@ class _AurTab(_Tab):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._enabled)
+        layout.addWidget(_help_label(help_text.get("aur", "enabled")))
         layout.addWidget(self._skip)
+        layout.addWidget(_help_label(help_text.get("aur", "skip")))
         layout.addWidget(_lbl("Helper preference (first found on PATH wins; one per line):"))
         layout.addWidget(self._helper_preference, stretch=1)
+        layout.addWidget(_help_label(help_text.get("aur", "helper_preference")))
 
     def load(self, cfg: ConfigModel) -> None:
         self._enabled.setChecked(cfg.aur.enabled)
@@ -362,8 +384,10 @@ class _PacmanTab(_Tab):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._noconfirm)
+        layout.addWidget(_help_label(help_text.get("pacman", "noconfirm")))
         layout.addWidget(_lbl("Extra pacman arguments (one per line):"))
         layout.addWidget(self._extra_args, stretch=1)
+        layout.addWidget(_help_label(help_text.get("pacman", "extra_args")))
 
     def load(self, cfg: ConfigModel) -> None:
         self._noconfirm.setChecked(cfg.pacman.noconfirm)
@@ -386,15 +410,9 @@ class _VerifyTab(_Tab):
         self._reboot_log.setPlaceholderText("/var/log/reboot-recommendation-trigger.log")
 
         form = QFormLayout(self)
-        form.addRow("", self._enabled)
-        form.addRow("Reboot-recommended log:", self._reboot_log)
-        hint = QLabel(
-            "Empty path disables the reboot-log check. EndeavorOS provides "
-            "/var/log/reboot-recommendation-trigger.log via eos-reboot-required."
-        )
-        hint.setStyleSheet("color: #6c757d;")
-        hint.setWordWrap(True)
-        form.addRow("", hint)
+        form.addRow("", _field_with_help(self._enabled, "verify", "enabled"))
+        form.addRow("Reboot-recommended log:",
+                    _field_with_help(self._reboot_log, "verify", "reboot_log"))
 
     def load(self, cfg: ConfigModel) -> None:
         self._enabled.setChecked(cfg.verify.enabled)
@@ -423,16 +441,9 @@ class _PrivilegeTab(_Tab):
         ask_row.addWidget(askpass_browse)
 
         form = QFormLayout(self)
-        form.addRow("Sudo strategy:", self._mode)
-        form.addRow("Askpass override (path):", _wrap(ask_row))
-        hint = QLabel(
-            "Leave Askpass empty to auto-discover (ksshaskpass → lxqt-openssh-askpass "
-            "→ ssh-askpass). The 'auto' strategy picks askpass+persistent if a binary "
-            "is found."
-        )
-        hint.setStyleSheet("color: #6c757d;")
-        hint.setWordWrap(True)
-        form.addRow("", hint)
+        form.addRow("Sudo strategy:", _field_with_help(self._mode, "privilege", "mode"))
+        form.addRow("Askpass override (path):",
+                    _field_with_help(_wrap(ask_row), "privilege", "askpass"))
 
     def _browse_askpass(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Askpass binary", "/usr/bin")
@@ -475,9 +486,7 @@ class _AdvancedTab(QWidget):
         )
         open_cfg_btn.clicked.connect(self._open_config)
 
-        path_label = QLabel(f"Active config file: {default_config_path()}")
-        path_label.setStyleSheet("color: #6c757d;")
-        path_label.setWordWrap(True)
+        path_label = _help_label(f"Active config file: {default_config_path()}")
 
         layout = QVBoxLayout(self)
         layout.addWidget(redetect_btn)
@@ -664,6 +673,57 @@ class PreferencesDialog(QDialog):
 def _lbl(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet("color: #6c757d;")
+    return lbl
+
+
+def _help_label(text: str) -> QLabel:
+    """Theme-aware muted help label.
+
+    Uses `palette(mid)` so the color tracks the active Qt theme automatically
+    (Breeze, Breeze Dark, Adwaita, …) — fixes the dim-on-dark / dim-on-light
+    legibility problem the v0.1.2 hard-coded gray had. Italic + a slight
+    left indent visually separate the help from the field label above.
+    """
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        "color: palette(mid);"
+        "font-style: italic;"
+        "padding-left: 8px;"
+        "font-size: 11px;"
+    )
+    lbl.setWordWrap(True)
+    return lbl
+
+
+def _field_with_help(widget: QWidget, section: str, field: str) -> QWidget:
+    """Wrap `widget` with a small help label below it. The label text is sourced
+    from help_text.HELP keyed by (section, field). Missing keys produce no label."""
+    body = help_text.get(section, field)
+    if not body:
+        return widget
+    container = QWidget()
+    vbox = QVBoxLayout(container)
+    vbox.setContentsMargins(0, 0, 0, 0)
+    vbox.setSpacing(2)
+    vbox.addWidget(widget)
+    vbox.addWidget(_help_label(body))
+    return container
+
+
+def _section_help(section: str, key: str = "_section") -> QLabel | None:
+    """Section-level help banner shown at the top of a tab. None if missing."""
+    body = help_text.get(section, key)
+    if not body:
+        return None
+    lbl = _help_label(body)
+    # Override _help_label's left indent — section banners look better
+    # flush-left with extra vertical breathing room.
+    lbl.setStyleSheet(
+        "color: palette(mid);"
+        "font-style: italic;"
+        "font-size: 11px;"
+        "padding: 4px 0 8px 0;"
+    )
     return lbl
 
 

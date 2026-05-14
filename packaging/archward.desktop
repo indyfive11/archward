@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=archward
+Name=Archward
 GenericName=Safe System Update
 Comment=Snapshot, gate, update, and verify your Arch-based system
 Exec=archward-gui
