@@ -133,7 +133,9 @@ class MainWindow(QMainWindow):
         self.bus: EventBus | None = None
         self.bridge: QtEventBridge | None = None
         self.strategy: SudoStrategy = build_sudo_strategy(self.cfg)
-        self.prompter = GuiPrompter(parent=self)
+        # Prompter is built after the views — it needs a RiskView reference
+        # for the v0.3.0 inline-decision flow.
+        self.prompter: GuiPrompter | None = None
         self.worker: PipelineWorker | None = None
 
         # ── Phase views ────────────────────────────────────────────────────
@@ -145,6 +147,7 @@ class MainWindow(QMainWindow):
             "pacnew": PacnewView(),
             "verify": VerifyView(),
         }
+        self.prompter = GuiPrompter(risk_view=self._views["risk"], parent=self)
         self._stack = QStackedWidget()
         for v in self._views.values():
             self._stack.addWidget(v)
@@ -430,5 +433,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.worker is not None and self.worker.isRunning():
             self.worker.cancel_event.set()
+            # If the worker is blocked waiting on a HIGH-risk decision the
+            # user can no longer make, force-cancel that wait so the thread
+            # can exit cleanly.
+            if self.prompter is not None:
+                self.prompter.cancel_pending_decision()
             self.worker.wait(3000)
         super().closeEvent(event)

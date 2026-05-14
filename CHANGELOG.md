@@ -6,6 +6,56 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-14
+
+MINOR bump for a new capability: per-row deselect in the Risk view.
+
+### Added
+
+- **Per-row package deselect in the Risk view** — the previous v0.1.x flow
+  was a modal `QMessageBox` asking "Proceed with N HIGH RISK package(s)?
+  [Yes/No]" — all-or-nothing. v0.3.0 replaces this with inline interaction:
+  every row in the HIGH/MEDIUM/LOW tree now has a checkbox (defaulted
+  checked = include in update), and the view gains **Proceed with update**
+  / **Cancel update** buttons at the bottom. Unchecked package names flow
+  through as `--ignore=<pkg>` flags on the pacman command line so pacman
+  resolves the rest of the transaction without those packages.
+
+- **Prompter Protocol extended** — `decide_high_risk(high) → (proceed,
+  ignored_pkg_names)` replaces the boolean `confirm_high_risk`.
+  Implementations:
+  - **GuiPrompter** — activates the RiskView's buttons via a queued Qt
+    signal, blocks on a `threading.Event`, returns the (proceed,
+    deselected_names) pair when the user clicks.
+  - **CliPrompter** — keeps the legacy Y/N prompt; returns an empty
+    ignore list. CLI interactive deselect can land in a later release.
+  - **AutoYesPrompter / AutoNoPrompter** — return `(True, [])` /
+    `(False, [])` unchanged.
+
+- **`PipelineResult.deselected_packages`** — tuple of package names the
+  user dropped from the HIGH-risk run. Logged into the pipeline log as
+  "User deselected N package(s): pkg1, pkg2, ..." so the audit trail
+  matches what pacman actually saw.
+
+- **`closeEvent` hardening** — `GuiPrompter.cancel_pending_decision()` is
+  called when the main window closes mid-decision, so the worker thread
+  doesn't hang waiting on user input that's no longer reachable.
+
+### Tests
+
+- 136 unit tests (125 baseline + 11 new):
+  - 7 covering `decide_high_risk` across all 4 prompter implementations
+    (auto-yes / auto-no / cli with y/yes/n/empty/EOF).
+  - 4 covering `pacman_argv`'s `--ignore` flag handling (empty list, single
+    package, multi-package, ordering with extra_args).
+
+### Migration
+
+- The `Prompter.confirm_high_risk(high) → bool` method is replaced by
+  `decide_high_risk(high) → (bool, list[str])`. Custom prompter
+  implementations need updating. Built-in prompters (CLI / Auto / Gui)
+  already handle the new contract.
+
 ## [0.2.2] — 2026-05-14
 
 ### Added
@@ -269,7 +319,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/indyfive11/archward/releases/tag/v0.3.0
 [0.2.2]: https://github.com/indyfive11/archward/releases/tag/v0.2.2
 [0.2.1]: https://github.com/indyfive11/archward/releases/tag/v0.2.1
 [0.2.0]: https://github.com/indyfive11/archward/releases/tag/v0.2.0

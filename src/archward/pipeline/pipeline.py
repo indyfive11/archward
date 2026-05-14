@@ -47,6 +47,7 @@ class PipelineResult:
     preflight_failed: bool = False
     update_exit_code: int | None = None
     pending: list[PendingUpdate] = field(default_factory=list)
+    deselected_packages: tuple[str, ...] = ()
     aur: AurResult | None = None
     verify: VerifyResult | None = None
     pacnew_count: int = 0
@@ -221,7 +222,8 @@ def run_pipeline(
                     pacnew_count=0,
                 )
                 return result
-            if not prompter.confirm_high_risk(list(high)):
+            proceed, ignored = prompter.decide_high_risk(list(high))
+            if not proceed:
                 result.aborted_reason = "user declined HIGH RISK update"
                 result.summary = derive_result(
                     preflight_failed=True,
@@ -231,6 +233,12 @@ def run_pipeline(
                     pacnew_count=0,
                 )
                 return result
+            if ignored:
+                bus.emit_log(
+                    "risk",
+                    f"User deselected {len(ignored)} package(s): {', '.join(ignored)}",
+                )
+                result.deselected_packages = tuple(ignored)
 
     # ── Hooks (v2 stub) ─────────────────────────────────────────────────────
     hooks.run_pre_update(None)
@@ -238,7 +246,9 @@ def run_pipeline(
     # ── Update official ─────────────────────────────────────────────────────
     if pending:
         update_code = update_official.run_official_update(
-            cfg, strategy, bus, cancel_event=cancel_event
+            cfg, strategy, bus,
+            ignore=list(result.deselected_packages),
+            cancel_event=cancel_event,
         )
         result.update_exit_code = update_code
         if update_code != 0:
