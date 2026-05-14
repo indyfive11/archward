@@ -6,6 +6,29 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-05-14
+
+### Added
+
+- **Desktop notifications on pipeline completion** via `notify-send`
+  (libnotify). Default-on; opt-out via `general.notify_on_completion = false`
+  in TOML or the Preferences General tab checkbox. Silently disabled if
+  libnotify isn't installed.
+- **Urgency mirrors RESULT severity**:
+  - `SUCCESS` / `NEEDS_REVIEW` → `low` (auto-dismiss)
+  - `REBOOT_NEEDED` / `PACNEW_MERGE_NEEDED` → `normal`
+  - `VERIFY_FAILED` / `UPDATE_FAILED` → `critical` (persists until dismissed)
+- **Body composer** surfaces verify FAIL/WARN counts, AUR build failures
+  (first 3 names + "+N more"), abort reasons, and secondary tags so the
+  notification carries the same context the result strip does.
+- Wired from both CLI (after final RESULT print) and GUI (`MainWindow._on_pipeline_done`).
+
+### Tests
+
+- 89 unit tests (80 baseline + 9 covering the notification composer:
+  urgency mapping, body framing per RESULT tag, AUR failure truncation,
+  secondary tag annotation, None-summary handling).
+
 ## [0.1.2] — 2026-05-14
 
 ### Added
@@ -111,7 +134,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/indyfive11/archward/releases/tag/v0.1.3
 [0.1.2]: https://github.com/indyfive11/archward/releases/tag/v0.1.2
 [0.1.1]: https://github.com/indyfive11/archward/releases/tag/v0.1.1
 [0.1.0]: https://github.com/indyfive11/archward/releases/tag/v0.1.0

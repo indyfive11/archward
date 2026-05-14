@@ -45,6 +45,7 @@ from archward.models.update import PendingUpdate
 from archward.models.verify import VerifyResult
 from archward.pipeline.pipeline import Mode, PipelineResult, run_pipeline
 from archward.privilege.sudo import SudoStrategy
+from archward.system import notify
 from archward.system.distro import detect_distro
 from archward.ui.dialogs.preferences import PreferencesDialog
 from archward.ui.log_pane import LogPane
@@ -382,6 +383,8 @@ class MainWindow(QMainWindow):
                 self._rail.select_phase("pacnew")
         self._result_banner.show_result(result)
         self._rail.mark_unstarted_skipped()
+        # Desktop notification on completion.
+        notify.notify_completion(result, self.cfg)
 
     # ── Preferences ────────────────────────────────────────────────────────
 

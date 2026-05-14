@@ -128,6 +128,7 @@ def default_config() -> ConfigModel:
             keep_snapshots=10,
             log_dir=paths.logs_dir(),
             keep_logs=20,
+            notify_on_completion=True,
         ),
         gates=GatesConfig(
             snapshot_max_age_minutes=60,

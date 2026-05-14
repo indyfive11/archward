@@ -13,6 +13,7 @@ from archward.app import acquire_lock, check_distro_or_exit, setup_app
 from archward.config.detect import apply_detection, diff_against, run_full_detection
 from archward.config.loader import default_config_path, load_config, write_config
 from archward.pipeline.pipeline import Mode, run_pipeline
+from archward.system import notify
 from archward.system.distro import detect_distro
 
 log = logging.getLogger(__name__)
@@ -231,6 +232,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    - {f.package}", flush=True)
     if summary.reboot_needed:
         print("  ACTION: Reboot to activate the new kernel.", flush=True)
+
+    # Desktop notification on completion (no-op if libnotify missing or
+    # cfg.general.notify_on_completion is False).
+    notify.notify_completion(result, cfg)
 
     # Exit code mirrors bash pipeline behavior:
     #   0 = SUCCESS / PACNEW_MERGE_NEEDED / NEEDS_REVIEW (warnings or info only)

@@ -14,6 +14,7 @@ class GeneralConfig(BaseModel):
     keep_snapshots: int = 10
     log_dir: Path
     keep_logs: int = 20
+    notify_on_completion: bool = True
 
     @field_validator("snapshot_dir", "log_dir", mode="before")
     @classmethod

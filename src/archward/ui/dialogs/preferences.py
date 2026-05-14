@@ -118,6 +118,8 @@ class _GeneralTab(_Tab):
         self._keep_logs = QSpinBox()
         self._keep_logs.setRange(1, 100)
 
+        self._notify_on_completion = QCheckBox("Show a desktop notification when the pipeline finishes")
+
         snapshot_row = QHBoxLayout()
         snapshot_row.addWidget(self._snapshot_dir, stretch=1)
         snapshot_row.addWidget(snapshot_browse)
@@ -130,6 +132,7 @@ class _GeneralTab(_Tab):
         form.addRow("Keep N snapshots:", _field_with_help(self._keep_snapshots, "general", "keep_snapshots"))
         form.addRow("Log directory:", _field_with_help(_wrap(log_row), "general", "log_dir"))
         form.addRow("Keep N log files:", _field_with_help(self._keep_logs, "general", "keep_logs"))
+        form.addRow("", _field_with_help(self._notify_on_completion, "general", "notify_on_completion"))
 
     def _browse(self, target: QLineEdit) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Choose directory", target.text())
@@ -141,6 +144,7 @@ class _GeneralTab(_Tab):
         self._log_dir.setText(str(cfg.general.log_dir))
         self._keep_snapshots.setValue(cfg.general.keep_snapshots)
         self._keep_logs.setValue(cfg.general.keep_logs)
+        self._notify_on_completion.setChecked(cfg.general.notify_on_completion)
 
     def dump(self) -> GeneralConfig:
         return GeneralConfig(
@@ -148,6 +152,7 @@ class _GeneralTab(_Tab):
             log_dir=Path(self._log_dir.text()),
             keep_snapshots=self._keep_snapshots.value(),
             keep_logs=self._keep_logs.value(),
+            notify_on_completion=self._notify_on_completion.isChecked(),
         )
 
 
@@ -677,16 +682,18 @@ def _lbl(text: str) -> QLabel:
 
 
 def _help_label(text: str) -> QLabel:
-    """Theme-aware muted help label.
+    """Help label using full-strength text color + italic.
 
-    Uses `palette(mid)` so the color tracks the active Qt theme automatically
-    (Breeze, Breeze Dark, Adwaita, …) — fixes the dim-on-dark / dim-on-light
-    legibility problem the v0.1.2 hard-coded gray had. Italic + a slight
-    left indent visually separate the help from the field label above.
+    Prior iterations used `palette(mid)` and `#6c757d` for visual muting, but
+    both rendered invisibly on some themes — Plasma Breeze pins `mid` very
+    close to the window background, and hard-coded grays disappear on dark
+    themes. Using `palette(text)` guarantees the help is always readable
+    regardless of theme; visual hierarchy comes from italic + smaller font +
+    slight left indent rather than from color.
     """
     lbl = QLabel(text)
     lbl.setStyleSheet(
-        "color: palette(mid);"
+        "color: palette(text);"
         "font-style: italic;"
         "padding-left: 8px;"
         "font-size: 11px;"
@@ -719,7 +726,7 @@ def _section_help(section: str, key: str = "_section") -> QLabel | None:
     # Override _help_label's left indent — section banners look better
     # flush-left with extra vertical breathing room.
     lbl.setStyleSheet(
-        "color: palette(mid);"
+        "color: palette(text);"
         "font-style: italic;"
         "font-size: 11px;"
         "padding: 4px 0 8px 0;"

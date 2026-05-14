@@ -32,6 +32,12 @@ HELP: dict[tuple[str, str], str] = {
     ("general", "keep_logs"): (
         "Number of rotated log files to retain. Each archive caps at ~2 MB."
     ),
+    ("general", "notify_on_completion"): (
+        "Show a desktop notification when the pipeline finishes. Uses "
+        "`notify-send` (libnotify) — silently disabled if not installed. "
+        "Notification urgency mirrors the RESULT tag: success → low (auto-"
+        "dismiss), reboot/pacnew → normal, failures → critical (persist)."
+    ),
 
     # ── Gates ──────────────────────────────────────────────────────────────
     ("gates", "snapshot_max_age_minutes"): (
