@@ -150,14 +150,15 @@ HIGH-risk approval and recoverable gate overrides route through modal
 dialogs; the pipeline worker thread blocks on the user's answer via
 `BlockingQueuedConnection`.
 
-## Compared to the bash equivalent
+## Scope
 
-archward generalizes the EndeavorMain bash pipeline at `~/bin/` while keeping
-the behavior contract: identical `RESULT:` tags, equivalent HIGH/MEDIUM/LOW
-classification, the same pacnew strategy table (with three universal
-hardening additions: resolved.conf, faillock.conf, sysctl.d/*). v1 ships
-universal checks only — network probes, HTTP health checks, port-listen,
-mountpoint checks reserved for v2 hooks (`pipeline/hooks.py` is the seam).
+archward ships **universal** safe-update behavior — gates, risk
+classification, pacnew strategy, kernel-match verify — that applies to any
+Arch-based machine. Host-specific concerns (custom network probes, HTTP
+health checks for self-hosted services, port-listen verification, mountpoint
+checks for personal backup volumes, VPN connectivity gates) are deliberately
+**out of scope for v1** and reserved for v2 hooks (`pipeline/hooks.py` is
+the seam — pre-update and post-verify shell commands run from your config).
 
 ## Development
 

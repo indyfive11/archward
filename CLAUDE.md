@@ -19,18 +19,18 @@ Target user: any Arch-based-distro user who wants snapshot-backed, gated updates
 
 ## How this project came to be
 
-Rob has run a bash-based "safe system update pipeline" on EndeavorMain for months: `~/bin/pre-update-snapshot.sh`, `~/bin/system-update.sh`, `~/bin/post-update-verify.sh`. Those scripts work well but are full of EndeavorMain-specific hardcoding (his VPN IPs, Jellyfin/NFS/ZeroTier setup, Liberty Analytics backup path). archward is the **general-use rewrite** — same workflow shape, machine-neutral, GUI-fronted.
+The maintainer ran a bash-based "safe system update pipeline" on his desktop for months: `pre-update-snapshot.sh`, `system-update.sh`, `post-update-verify.sh`. Those scripts work well but were full of host-specific hardcoding (custom VPN IPs, self-hosted media-server probes, machine-local backup paths). archward is the **general-use rewrite** — same workflow shape, machine-neutral, GUI-fronted.
 
 The bash scripts are the **reference implementation for behavior** — read them to understand *what* the gates/risk-classification/pacnew-strategy/verify checks should do. archward is a clean rewrite (not a port); take the *concepts* and reimplement them properly in Python.
 
 ## Read first (in this order)
 
 1. [`PLAN.md`](./PLAN.md) — the canonical spec. Project structure, data model, TOML schema, pipeline phases, GUI design, packaging, test plan, implementation order.
-2. `/home/rob/bin/system-update.sh` — gate logic, risk classification, .pacnew strategy table
+2. `/home/rob/bin/system-update.sh` — gate logic, risk classification, .pacnew strategy table (maintainer's local reference; not part of the public repo)
 3. `/home/rob/bin/pre-update-snapshot.sh` — what state to capture
-4. `/home/rob/bin/post-update-verify.sh` — *separate the universal checks from EndeavorMain-specific ones*. v1 only implements the universal ones.
-5. `/home/rob/dev/liberty-books/main.py` and `/home/rob/dev/liberty-books/ui/` — Rob's existing PySide6 patterns; mirror these conventions where they apply.
-6. `/home/rob/dev/endeavoring-conky/README.md` and `/home/rob/dev/endeavoring-conky/LICENSE` — Rob's public-repo conventions (GPL-3.0, README structure, AUR-friendly layout).
+4. `/home/rob/bin/post-update-verify.sh` — *separate the universal checks from host-specific ones*. v1 only implements the universal ones.
+5. `/home/rob/dev/liberty-books/main.py` and `/home/rob/dev/liberty-books/ui/` — sibling PySide6 project; mirror these conventions where they apply.
+6. `/home/rob/dev/endeavoring-conky/README.md` and `/home/rob/dev/endeavoring-conky/LICENSE` — sibling public-repo conventions (GPL-3.0, README structure, AUR-friendly layout).
 
 ## Locked decisions (do not relitigate)
 
@@ -45,7 +45,7 @@ The bash scripts are the **reference implementation for behavior** — read them
 | License | GPL-3.0-or-later |
 | Repo | `git@github.com:indyfive11/archward.git` (public) — **do not create or push without explicit user request** |
 | Build backend | hatchling |
-| v1 verify scope | **Universal checks + opt-in services list ONLY.** No network probes, no HTTP health, no port-listen checks, no mountpoint checks — those are EndeavorMain-specific and reserved for v2 hooks. |
+| v1 verify scope | **Universal checks + opt-in services list ONLY.** No network probes, no HTTP health, no port-listen checks, no mountpoint checks — those are host-specific and reserved for v2 hooks. |
 
 ## v2 reservations — leave seams, do not implement
 
@@ -124,12 +124,12 @@ The eventual remote will be `git@github.com:indyfive11/archward.git` (matches th
 
 ## Test machine context
 
-If working on Rob's EndeavorMain to dogfood archward:
+If dogfooding archward on the maintainer's primary desktop:
 - Distro: EndeavourOS, kernel `linux-cachyos-bore`
 - DE: KDE Plasma 6 on Wayland
 - AUR helper: `yay`
 - Askpass: `ksshaskpass` (KDE-native)
-- Bash pipeline scripts at `~/bin/` are the comparison baseline — archward's `RESULT:` tags should match the bash output for the same machine state.
+- Local bash pipeline scripts at `~/bin/` are the comparison baseline — archward's `RESULT:` tags should match the bash output for the same machine state.
 - Existing snapshots at `~/update-snapshots/` are from the bash pipeline; archward uses `~/.local/state/archward/snapshots/` (different path, no conflict).
 
 For testing on other distros: spin up a VM or container. PLAN.md §14 has the full manual test matrix.

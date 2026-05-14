@@ -2,7 +2,7 @@
 
 ## Context
 
-Rob currently maintains three bash scripts at `/home/rob/bin/` (`pre-update-snapshot.sh`, `system-update.sh`, `post-update-verify.sh`) that implement a "safe system update pipeline" for EndeavorMain. The pipeline works well — months of refinement, robust gates, snapshot-based rollback reference, RESULT-tagged output. But it's full of EndeavorMain-specific hardcoding: VPN gateway IPs, Jellyfin health probes, Liberty Analytics backup-freshness gate, NFS mount checks, ZeroTier interface names, CachyOS-BORE-specific kernel package, MEDIUM-risk pattern list tuned to his media-server services.
+The maintainer ran three bash scripts at `~/bin/` (`pre-update-snapshot.sh`, `system-update.sh`, `post-update-verify.sh`) that implement a "safe system update pipeline" on his Arch-based desktop. The pipeline works well — months of refinement, robust gates, snapshot-based rollback reference, RESULT-tagged output. But it's full of host-specific hardcoding: custom VPN gateway IPs, self-hosted media-server probes, personal backup-freshness gates, NFS mount checks, overlay-network interface names, distro-specific kernel package names, MEDIUM-risk pattern list tuned to a particular machine's services.
 
 The goal is a clean Python/PySide6 GUI rewrite — `archward` — that generalizes the locked-in behavior to any Arch-based machine (Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix), integrates AUR via auto-detected helpers (yay/paru/aurutils), and ships as an AUR package. The bash scripts are the **reference implementation for behavior** but archward is a greenfield rewrite, not a port. Implementation will happen in a fresh Claude conversation; this plan must be self-contained.
 
@@ -13,7 +13,7 @@ The goal is a clean Python/PySide6 GUI rewrite — `archward` — that generaliz
 - AUR: integrated second phase, auto-detects helper (yay > paru > aurutils), skips gracefully if none found, `--no-aur` flag opts out.
 - Config: single TOML at `~/.config/archward/config.toml`, auto-detect populates on first run.
 - License: GPL-3.0 (matches `endeavoring-conky/LICENSE`).
-- v1 verify scope: ONLY universal checks (kernel match, .pacnew, disk, pacman log) + `systemctl is-active` for opt-in service list. **No network probes, HTTP health, mountpoint checks** — those are EndeavorMain-specific and reserved for v2 hooks.
+- v1 verify scope: ONLY universal checks (kernel match, .pacnew, disk, pacman log) + `systemctl is-active` for opt-in service list. **No network probes, HTTP health, mountpoint checks** — those are host-specific and reserved for v2 hooks.
 - Public repo: `git@github.com:indyfive11/archward.git`.
 
 ---
@@ -479,7 +479,7 @@ to `RESULT:UPDATE_FAILED` with a clear message.
 - **Snapshot age** — find latest in `general.snapshot_dir`, read `.timestamp`, fail if older than `gates.snapshot_max_age_minutes`. Universal.
 - **Disk space** — `df -BG /`, fail if free < `gates.min_disk_gb`. Universal.
 
-The EndeavorMain-only backup-freshness and update-window-blackout gates from system-update.sh are **dropped from v1**. They can be reintroduced as v2 hooks.
+The host-specific backup-freshness and update-window-blackout gates from the reference bash pipeline are **dropped from v1**. They can be reintroduced as v2 hooks.
 
 ### Risk classification (`pipeline/risk.py`)
 
@@ -610,7 +610,7 @@ log pane.
 **Bucket B — Services** (one check per `config.services.to_verify` entry):
 - `systemctl is-active <unit>` → active = PASS; inactive/failed = severity lookup (`critical` default = FAIL, `watch` = WARN).
 
-**Explicitly NOT in v1:** network probes, HTTP health checks, port-listen verification, mountpoint checks. Those are EndeavorMain-specific; reserved for v2 hooks.
+**Explicitly NOT in v1:** network probes, HTTP health checks, port-listen verification, mountpoint checks. Those are host-specific; reserved for v2 hooks.
 
 ### RESULT tag mapping (CLI stdout, GUI banner)
 
@@ -1020,7 +1020,7 @@ For each: `--dry-run`, then real update in a VM, then verify phase. Confirm askp
 ## Non-goals (explicit)
 
 - No probe taxonomy in v1 (port-listen, ping, http-get, mountpoint).
-- No EndeavorMain-specific defaults — only universal detection.
+- No host-specific defaults — only universal detection.
 - No daemon; runs to completion and exits.
 - No scheduling in v1.
 - No multi-machine / fleet management.
