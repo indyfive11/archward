@@ -1,0 +1,172 @@
+"""Detection module — pure-logic surfaces (diff_against, apply_detection)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from archward.config.defaults import default_config
+from archward.config.detect import (
+    ConfigDiff,
+    DetectionResult,
+    apply_detection,
+    diff_against,
+)
+from archward.system.distro import DistroInfo
+
+
+def _det(
+    *,
+    kernels: tuple[str, ...] = (),
+    helper: str | None = None,
+    services: tuple[str, ...] = (),
+) -> DetectionResult:
+    return DetectionResult(
+        distro=DistroInfo(
+            id="arch",
+            pretty_name="Arch Linux",
+            is_arch_based=True,
+            detected_via="ID",
+            raw={"ID": "arch"},
+        ),
+        kernels=kernels,
+        helper=helper,
+        enabled_services=services,
+        pacnew_baseline=(),
+    )
+
+
+def test_diff_empty_when_aligned() -> None:
+    cfg = default_config()
+    # Pretend we found exactly what's covered by kernel_patterns + risk.high already.
+    det = _det(kernels=("linux", "linux-headers"), helper="yay", services=())
+    diff = diff_against(cfg, det)
+    assert diff.kernel_additions == ()
+    assert diff.service_additions == ()
+    assert diff.aur_disable is False
+
+
+def test_unknown_kernel_proposes_addition() -> None:
+    cfg = default_config()
+    # A made-up kernel name that's not matched by kernel_patterns.
+    det = _det(kernels=("linux-rt-custom",), helper="yay")
+    diff = diff_against(cfg, det)
+    assert "linux-rt-custom" in diff.kernel_additions
+
+
+def test_no_helper_flips_aur_disable() -> None:
+    cfg = default_config()
+    # Phase 3 default: aur.enabled=True. No helper detected → propose disabling.
+    det = _det(kernels=(), helper=None)
+    diff = diff_against(cfg, det)
+    assert diff.aur_disable is True
+
+
+def test_helper_found_no_change_to_aur() -> None:
+    """When a helper exists and aur.enabled is already True, no diff is proposed."""
+    cfg = default_config()
+    det = _det(kernels=(), helper="yay")
+    diff = diff_against(cfg, det)
+    assert diff.aur_disable is False
+
+
+def test_apply_detection_unions_kernels() -> None:
+    cfg = default_config()
+    det = _det(kernels=("linux-rt-custom",))
+    diff = ConfigDiff(
+        kernel_additions=("linux-rt-custom",),
+        service_additions=(),
+        aur_disable=False,
+        helper_set_to=None,
+    )
+    new_cfg = apply_detection(cfg, det, diff, accept_services=False)
+    assert "linux-rt-custom" in new_cfg.risk.high
+    # Original high entries preserved.
+    for pkg in cfg.risk.high:
+        assert pkg in new_cfg.risk.high
+
+
+def test_apply_detection_services_opt_in() -> None:
+    cfg = default_config()
+    det = _det(services=("sshd.service", "NetworkManager.service"))
+    diff = ConfigDiff(
+        kernel_additions=(),
+        service_additions=("sshd.service", "NetworkManager.service"),
+        aur_disable=False,
+        helper_set_to=None,
+    )
+
+    # Opt-out: no services added.
+    no_change = apply_detection(cfg, det, diff, accept_services=False)
+    assert no_change.services.to_verify == ()
+
+    # Opt-in: services added.
+    accepted = apply_detection(cfg, det, diff, accept_services=True)
+    assert "sshd.service" in accepted.services.to_verify
+    assert "NetworkManager.service" in accepted.services.to_verify
+
+
+def test_apply_detection_no_diff_returns_same() -> None:
+    cfg = default_config()
+    det = _det()
+    diff = ConfigDiff(
+        kernel_additions=(), service_additions=(), aur_disable=False, helper_set_to=None
+    )
+    out = apply_detection(cfg, det, diff)
+    assert out is cfg  # identity — no copy made
+
+
+def test_detect_kernels_excludes_split_firmware(monkeypatch) -> None:
+    """linux-firmware-amdgpu etc. are firmware blobs, NOT kernels — must be filtered out."""
+    import subprocess
+
+    from archward.config import detect as detect_mod
+
+    fake_stdout = "\n".join([
+        "linux",
+        "linux-api-headers",
+        "linux-cachyos-bore",
+        "linux-cachyos-bore-headers",
+        "linux-firmware",
+        "linux-firmware-amdgpu",
+        "linux-firmware-atheros",
+        "linux-firmware-radeon",
+        "linux-headers",
+        "linux-docs",
+        "linux-tools",
+        "linux-tools-meta",
+    ])
+
+    class FakeResult:
+        returncode = 0
+        stdout = fake_stdout
+
+    def fake_run(*args, **kwargs):
+        return FakeResult()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    kernels = detect_mod.detect_kernels()
+    assert "linux" in kernels
+    assert "linux-cachyos-bore" in kernels
+    assert "linux-cachyos-bore-headers" in kernels
+    assert "linux-headers" in kernels
+    assert "linux-api-headers" in kernels
+    # Firmware (all variants), docs, tools — excluded.
+    for excluded in (
+        "linux-firmware",
+        "linux-firmware-amdgpu",
+        "linux-firmware-atheros",
+        "linux-firmware-radeon",
+        "linux-docs",
+        "linux-tools",
+        "linux-tools-meta",
+    ):
+        assert excluded not in kernels, f"{excluded} should be filtered out"
+
+
+def test_diff_respects_kernel_pattern_exclude() -> None:
+    """Even if a package slips through detect_kernels, the diff must respect the exclude list."""
+    cfg = default_config()
+    det = _det(kernels=("linux-firmware-amdgpu",))
+    diff = diff_against(cfg, det)
+    # Default kernel_pattern_exclude includes linux-firmware* — must not propose adding.
+    assert "linux-firmware-amdgpu" not in diff.kernel_additions

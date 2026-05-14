@@ -1,0 +1,6 @@
+firefox 150.0.2-1.1 -> 150.0.3-1.1
+libinput 1.31.1-1.1 -> 1.31.2-1.1
+linux 7.0.5.arch1-1 -> 7.0.6.arch1-1
+linux-headers 7.0.5.arch1-1 -> 7.0.6.arch1-1
+openjph 0.27.2-1.1 -> 0.27.3-1.1
+postgresql-libs 18.3-2.1 -> 18.4-1.1

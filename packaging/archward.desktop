@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=archward
+GenericName=Safe System Update
+Comment=Snapshot, gate, update, and verify your Arch-based system
+Exec=archward-gui
+Icon=archward
+Categories=System;PackageManager;Qt;
+Keywords=update;upgrade;pacman;aur;arch;snapshot;
+Terminal=false
+StartupNotify=true

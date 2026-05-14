@@ -1,0 +1,79 @@
+# Changelog
+
+All notable changes to **archward** are documented here. Format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] — 2026-05-14
+
+Initial release.
+
+### Added
+
+- **Safe-update pipeline** for Arch-based Linux distributions
+  (Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix, and anything with
+  `arch` in `ID_LIKE`):
+  - Pre-flight: pacman `db.lck` detection + single-instance archward lock.
+  - Snapshot: packages, configs (pacman.conf, mirrorlist, fstab, grub,
+    sshd_config + sshd_config.d/, resolved.conf, sudoers.d/), network state
+    (ip addr / ss -tlnp / wg show), services, kernel + cmdline, pacnew
+    baseline.
+  - Gates: snapshot freshness, free disk on `/`.
+  - Risk classification: explicit HIGH list, kernel patterns (incl. headers)
+    with exclude list, MEDIUM fnmatch patterns, LOW fallthrough.
+  - Transaction preview via `pacman -Sup` against the checkupdates DB —
+    surfaces replacements / conflicts that `--noconfirm` would silently default.
+  - Official update: `sudo pacman -Syu --noconfirm --noprogressbar
+    --color=never`, line-buffered + ANSI-stripped streaming.
+  - AUR phase: auto-detect `yay` → `paru` → `aurutils`, build-failure
+    capture (last 50 lines per failed package).
+  - Pacnew: rule-based recommendation (sshd_config, mirrorlist, pacman.conf,
+    fstab, grub, resolved.conf, faillock.conf, sysctl.d/*, *.hook), take_new
+    preserves original ownership/mode.
+  - Verify: kernel match, .pacnew remaining, disk, pacman.log scan,
+    EndeavorOS reboot-recommended log, per-unit `systemctl is-active` for
+    configured services.
+  - Report: `RESULT:SUCCESS / NEEDS_REVIEW / REBOOT_NEEDED /
+    PACNEW_MERGE_NEEDED / VERIFY_FAILED / UPDATE_FAILED`.
+- **CLI** (`archward`): `--dry-run`, `--auto`, `--detect` (proposes config
+  diff against live system), `--no-aur`, `--write-config`, `--yes`.
+- **GUI** (`archward-gui`):
+  - Single QMainWindow, 9-row phase rail, QStackedWidget per-phase content
+    view, collapsible log pane, persistent result strip at the bottom.
+  - Per-phase views: snapshot progress, gates table, risk HIGH/MEDIUM/LOW
+    tree with transaction-preview banner, update stream pane (shared
+    official + AUR), pacnew table, verify grouped by bucket.
+  - HIGH-risk approval and recoverable gate-override route through modal
+    QMessageBox via `BlockingQueuedConnection`.
+  - Preferences dialog with 10 tabs (General, Gates, Risk, Services, Pacnew,
+    AUR, Pacman, Verify, Privilege, Advanced) editing the TOML
+    schema in place; Save validates the whole draft via Pydantic.
+  - Re-detect button proposes diff against the current draft; Reset to
+    defaults with confirmation; Open config.toml in `$EDITOR`.
+- **Config**: TOML loader at `~/.config/archward/config.toml` with
+  per-section ValidationError recovery, path expansion (`~/.local/state/...`
+  literal expansion), first-run defaults bootstrap.
+- **Auto-detect**: distro (via `ID` and `ID_LIKE`), kernels (excludes
+  firmware/docs/tools), AUR helper, enabled+active services, pacnew
+  baseline.
+- **Cancellation contract** (audit A3): SIGINT / GUI Cancel sets the cancel
+  event but never kills pacman or AUR helpers mid-flight.
+- **78 unit tests** covering risk classification (incl. headers + firmware
+  exclude), pacnew rule matching, RESULT precedence, TOML loader edge cases,
+  detect-module filters, AUR helper parsing, build-failure attribution.
+
+### Known limitations (deferred to later releases)
+
+- Pacnew per-row apply buttons + diff dialog (Phase-5 polish; current
+  behavior is read-only display).
+- Inline help text on Preferences fields (every tab needs a one-line
+  explanation per audit follow-up; PLAN.md §v2).
+- aurutils adapter is best-effort — see PKGBUILD optdepends note.
+- v1 verify scope is universal checks + opt-in services only; network
+  probes, HTTP health checks, port-listen, mountpoint checks reserved for
+  v2 hooks (`pipeline/hooks.py` is a stub today).
+
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/indyfive11/archward/releases/tag/v0.1.0

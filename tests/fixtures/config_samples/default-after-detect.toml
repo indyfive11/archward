@@ -1,0 +1,148 @@
+schema_version = 1
+
+[general]
+snapshot_dir = "/home/USER/.local/state/archward/snapshots"
+keep_snapshots = 10
+log_dir = "/home/USER/.local/state/archward/logs"
+keep_logs = 20
+
+[gates]
+snapshot_max_age_minutes = 60
+min_disk_gb = 5
+allow_override = true
+
+[risk]
+high = [
+    "glibc",
+    "lib32-glibc",
+    "systemd",
+    "systemd-libs",
+    "openssl",
+    "lib32-openssl",
+    "mesa",
+    "lib32-mesa",
+    "pipewire",
+    "pipewire-pulse",
+    "wireplumber",
+    "openssh",
+]
+medium_patterns = [
+    "*-server",
+    "docker*",
+    "qemu*",
+    "libvirt*",
+    "postgresql*",
+    "mariadb*",
+    "nginx*",
+    "apache*",
+]
+kernel_patterns = [
+    "linux",
+    "linux-headers",
+    "linux-lts",
+    "linux-lts-headers",
+    "linux-zen",
+    "linux-zen-headers",
+    "linux-hardened",
+    "linux-hardened-headers",
+    "linux-cachyos*",
+    "linux-api-headers",
+]
+kernel_pattern_exclude = [
+    "linux-firmware*",
+    "linux-docs*",
+]
+
+[services]
+to_verify = [
+    "apparmor.service",
+    "auditd.service",
+    "coolercontrold.service",
+    "jackett.service",
+    "jellyfin.service",
+    "lactd.service",
+    "libvirtd.service",
+    "net-monitor.service",
+    "NetworkManager-wait-online.service",
+    "NetworkManager.service",
+    "power-profiles-daemon.service",
+    "qbittorrent-nox.service",
+    "radarr.service",
+    "sddm.service",
+    "sonarr.service",
+    "sshd.service",
+    "ufw.service",
+    "vps-reachable.service",
+    "zerotier-one.service",
+]
+
+[services.severity]
+
+[pacnew]
+default_strategy = "review_needed"
+
+[[pacnew.rules]]
+pattern = "*sshd_config*"
+strategy = "review_needed"
+note = "SSH daemon config — review carefully"
+
+[[pacnew.rules]]
+pattern = "*mirrorlist*"
+strategy = "keep_ours"
+note = "Keep your rate-tested mirror order"
+
+[[pacnew.rules]]
+pattern = "*pacman.conf*"
+strategy = "review_needed"
+note = "Pacman options — review for new repos / IgnorePkg changes"
+
+[[pacnew.rules]]
+pattern = "*/fstab*"
+strategy = "review_needed"
+note = "Filesystem mounts — review before next boot"
+
+[[pacnew.rules]]
+pattern = "*/grub*"
+strategy = "review_needed"
+note = "Bootloader config — review before next boot"
+
+[[pacnew.rules]]
+pattern = "*resolved.conf*"
+strategy = "keep_ours"
+note = "DNS / DoT customizations frequently diverge from upstream"
+
+[[pacnew.rules]]
+pattern = "*faillock.conf*"
+strategy = "keep_ours"
+note = "Account lockout policy — preserve tuned values"
+
+[[pacnew.rules]]
+pattern = "*/sysctl.d/*"
+strategy = "keep_ours"
+note = "Kernel hardening params — preserve tuned values"
+
+[[pacnew.rules]]
+pattern = "*.hook"
+strategy = "take_new"
+note = "Pacman hooks usually track upstream"
+
+[aur]
+enabled = true
+helper_preference = [
+    "yay",
+    "paru",
+    "aurutils",
+]
+skip = false
+
+[pacman]
+noconfirm = true
+extra_args = []
+
+[verify]
+enabled = true
+reboot_log = "/var/log/reboot-recommendation-trigger.log"
+
+[privilege]
+mode = "auto"
+askpass = ""
