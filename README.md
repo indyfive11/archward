@@ -47,30 +47,42 @@ PySide6 GUI (`archward-gui`).
    can deselect specific packages at approval time → flow through as
    `--ignore` flags.
 7. **AUR** — auto-detect `yay` → `paru` → `aurutils`, run helper update,
-   capture build failures (last 50 lines per failed package). Skipped
-   gracefully if no helper is on PATH.
+   capture build failures (last 50 lines per failed package). When
+   `pacman.noconfirm=False`, every pending AUR PKGBUILD is fetched
+   upfront (`git clone --depth=1`) and shown in a per-package review
+   modal with Approve / Reject; rejected packages flow to `--ignore`.
+   Skipped gracefully if no helper is on PATH.
 8. **Pacnew** — find new `.pacnew` files since snapshot, classify per a
-   rule table (sshd_config / mirrorlist / pacman.conf / fstab / grub /
-   resolved.conf / faillock.conf / sysctl.d/* / *.hook); apply preserves
-   original ownership and permissions.
+   user-editable rule table (sshd_config / mirrorlist / pacman.conf /
+   fstab / grub / resolved.conf / faillock.conf / sysctl.d/* / *.hook by
+   default; add / edit / remove via Preferences → Pacnew). Apply
+   preserves original ownership and permissions; partial failure on
+   chown/chmod restores from a backup.
 9. **Verify** — kernel match, .pacnew remaining, disk, pacman.log scan,
    opt-in `systemctl is-active` services list, optional
-   reboot-recommended log.
+   reboot-recommended log. Each FAIL row gets a "What to do?" button
+   with a context-specific remediation hint.
 10. **Post-verify hooks** — run user-defined shell commands from
     `cfg.hooks.post_verify` (e.g. HTTP health probes, mountpoint checks,
     real-time reachability). Always best-effort; never abort.
+    `$ARCHWARD_RESULT` exposes the RESULT tag for branching.
 11. **Report** — emit `RESULT:` tag (`SUCCESS` / `NEEDS_REVIEW` /
     `REBOOT_NEEDED` / `PACNEW_MERGE_NEEDED` / `VERIFY_FAILED` /
     `UPDATE_FAILED`) for scripted use; secondary tags annotate the primary.
-    Desktop notification fires via `notify-send` (opt-out).
+    Desktop notification fires via `notify-send` (opt-out). Snapshot
+    retention runs last — `keep_snapshots` worth of newest snapshots
+    survive; older ones are pruned.
 
 ## Install
 
-### AUR (recommended once published)
+### AUR (recommended)
 
 ```bash
 yay -S archward
 ```
+
+Published to the AUR — `aur.archlinux.org/packages/archward`. Maintainer
+`indyfive11`. Bumped on every tagged release.
 
 ### From source
 
@@ -266,28 +278,43 @@ The single-window GUI mirrors the CLI pipeline:
 - **Content area** (right) — `QStackedWidget` whose page switches with the
   active phase: snapshot progress checklist, gates table, risk
   HIGH/MEDIUM/LOW tree with per-package checkboxes + Proceed/Cancel
-  buttons, update stream pane (shared official + AUR), pacnew table with
-  per-row View Diff / Keep Ours / Take New / Edit buttons, verify grouped
-  by bucket (universal · services · plugin · hooks). The view stays on the
-  last live phase after completion.
+  buttons, update stream pane (shared official + AUR) with an inline
+  prompt input row that lights up when pacman or yay/paru asks an
+  interactive question (`[Y/n]`, provider selection) — answer it inside
+  archward instead of being kicked to a terminal. Pacnew table with
+  per-row View Diff / Keep Ours / Take New / Edit buttons. Verify view
+  grouped by bucket (universal · services · plugin · hooks) with a
+  "What to do?" remediation hint on every FAIL row. The view stays on
+  the last live phase after completion.
 - **Log pane** (bottom, collapsible) — full text of everything the pipeline
   emitted, dual-logged to `~/.local/state/archward/logs/archward.log`.
 - **Result strip** (bottom) — slim, color-coded banner showing the final
   RESULT tag plus a compact one-liner of secondary signals.
+- **Toolbar** — Run Dry-Run, Run Update, Snapshot Browser…, Preferences…,
+  About (left-to-right). A "🛡 Archward _version_" brand cue anchors the
+  left edge; the active distro name is shown beside it.
 - **Snapshot Browser…** toolbar button — modal browser over all past
   snapshots with per-file config restore (perm-preserving) and per-package
   upgrade/downgrade (via `pacman -U` against the local cache). Bulk
   variants ("Restore all configs", "Apply all package versions") run in
   one atomic transaction; boot-critical packages require Type-YES
   confirmation. A pre-rollback snapshot is taken automatically so
-  rollback-of-rollback works.
+  rollback-of-rollback works. **"Prune now…"** runs the retention pass
+  on demand with a configurable keep-count.
 - **Preferences…** toolbar button — 12-tab dialog over the TOML schema
   (General · Gates · Risk · Services · Pacnew · AUR · Pacman · Verify ·
   Privilege · Hooks · Profiles · Advanced) with inline help text per
-  field. The **Profiles** tab lists every profile (plus the default
-  config), switches the running window in-place, and supports
-  new/rename/delete/open-in-editor. The **Advanced** tab has Re-detect
-  (propose diff), Reset to defaults, Open config in `$EDITOR`.
+  field. The **Pacnew** tab is a fully editable rule table (Pattern /
+  Strategy combo / Note) with Add / Remove / Restore defaults — no more
+  hand-editing `config.toml`. The **Hooks** tab has an "Insert template…"
+  combobox per editor with prebaked snippets (btrfs snapshot, stale-
+  backup gate, Discord webhook, restart user services). The **Profiles**
+  tab lists every profile (plus the default config), switches the
+  running window in-place, and supports new/rename/delete/diff vs
+  default/import/export. The **Advanced** tab has Re-detect (propose
+  diff), Reset to defaults, Open config in your editor.
+- **About** toolbar button — small modal with the shield icon at 96 px,
+  version, license, GitHub + AUR links.
 
 HIGH-risk approval happens **inline** in the Risk view: per-package
 checkboxes default checked, Proceed/Cancel buttons enable when the
