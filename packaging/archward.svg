@@ -3,49 +3,58 @@
   <title>archward</title>
   <desc>Safe-update guard for Arch-based Linux distributions</desc>
 
-  <!-- Shield body -->
-  <path d="M 128 20
-           L 36 52
-           L 36 132
-           C 36 188 72 224 128 240
-           C 184 224 220 188 220 132
-           L 220 52
+  <!-- ── Shield body ───────────────────────────────────────────────────
+       Classic heraldic shield: flat top, curved sides that narrow to a
+       rounded point. Sized inside a 32px safe margin so the icon stays
+       legible at 22px launcher sizes without the stroke clipping. -->
+  <path d="M 128 28
+           L 40 56
+           L 40 132
+           C 40 188 76 224 128 240
+           C 180 224 216 188 216 132
+           L 216 56
            Z"
-        fill="#2c5aa0"
-        stroke="#1e3a5f"
+        fill="#0e7490"
+        stroke="#083344"
         stroke-width="6"
         stroke-linejoin="round"/>
 
-  <!-- Inner highlight to give the shield a soft surface -->
-  <path d="M 128 36
-           L 50 64
-           L 50 128
-           C 50 176 80 210 128 224
-           C 176 210 206 176 206 128
-           L 206 64
+  <!-- Subtle inner edge to give the shield depth without gradients
+       (gradients dither poorly at 22-32px). -->
+  <path d="M 128 44
+           L 54 68
+           L 54 130
+           C 54 178 84 208 128 222
+           C 172 208 202 178 202 130
+           L 202 68
            Z"
         fill="none"
-        stroke="#4a7bb6"
-        stroke-width="3"
-        opacity="0.7"/>
+        stroke="#14b8c4"
+        stroke-width="2.5"
+        opacity="0.55"/>
 
-  <!-- Circular update arrow centered on the shield -->
-  <path d="M 96 142
-           A 36 36 0 1 1 156 152"
-        fill="none"
-        stroke="#ffffff"
-        stroke-width="14"
-        stroke-linecap="round"/>
-  <!-- Arrowhead -->
-  <polygon points="146,140 174,154 158,168" fill="#ffffff"/>
+  <!-- ── Arch silhouette (stylized tetrahedron) ────────────────────────
+       Simplified to two clean strokes: outer triangle + an inner
+       triangle hint. Reads as the Arch motif at every size without
+       needing the three-faced 3D rendering of the official logo. -->
 
-  <!-- Tiny checkmark below the arrow to convey "verified" -->
-  <path d="M 108 184
-           L 122 198
-           L 152 168"
-        fill="none"
+  <!-- Outer triangle outline -->
+  <path d="M 128 86
+           L 86 174
+           L 170 174
+           Z"
+        fill="#ffffff"
         stroke="#ffffff"
-        stroke-width="9"
-        stroke-linecap="round"
+        stroke-width="2"
         stroke-linejoin="round"/>
+
+  <!-- Inner negative-space triangle (cut into the white face so the
+       teal shield shows through, suggesting the Arch tetrahedron's
+       inner facet). -->
+  <path d="M 128 122
+           L 110 162
+           L 146 162
+           Z"
+        fill="#0e7490"
+        stroke="none"/>
 </svg>
