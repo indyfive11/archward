@@ -671,16 +671,45 @@ class _ProfilesTab(QWidget):
         )
         self._delete_btn.clicked.connect(self._on_delete)
 
-        # Two-column button grid: cheap and predictable.
+        self._diff_btn = QPushButton("Diff vs default…")
+        self._diff_btn.setToolTip(
+            "Show a unified diff of the selected profile against archward "
+            "defaults. Read-only — useful for 'what does this profile "
+            "actually change?'"
+        )
+        self._diff_btn.clicked.connect(self._on_diff_vs_default)
+
+        self._import_btn = QPushButton("Import…")
+        self._import_btn.setToolTip(
+            "Load a profile .toml from anywhere on disk. The file is "
+            "validated, then copied into ~/.config/archward/profiles/ "
+            "under a name you choose."
+        )
+        self._import_btn.clicked.connect(self._on_import)
+
+        self._export_btn = QPushButton("Export…")
+        self._export_btn.setToolTip(
+            "Copy the selected profile to a chosen location for "
+            "sharing or backup."
+        )
+        self._export_btn.clicked.connect(self._on_export)
+
+        # Three-row button grid: primary actions on top, manage-data
+        # actions below. Diff sits next to Open in editor because both
+        # are inspect-only.
         btn_row1 = QHBoxLayout()
         btn_row1.addWidget(self._switch_btn)
         btn_row1.addWidget(self._open_btn)
+        btn_row1.addWidget(self._diff_btn)
         btn_row2 = QHBoxLayout()
         btn_row2.addWidget(self._new_defaults_btn)
         btn_row2.addWidget(self._save_as_btn)
         btn_row3 = QHBoxLayout()
-        btn_row3.addWidget(self._rename_btn)
-        btn_row3.addWidget(self._delete_btn)
+        btn_row3.addWidget(self._import_btn)
+        btn_row3.addWidget(self._export_btn)
+        btn_row4 = QHBoxLayout()
+        btn_row4.addWidget(self._rename_btn)
+        btn_row4.addWidget(self._delete_btn)
 
         self._summary = _help_label("")
         self._hint = _help_label(
@@ -703,6 +732,7 @@ class _ProfilesTab(QWidget):
         layout.addLayout(btn_row1)
         layout.addLayout(btn_row2)
         layout.addLayout(btn_row3)
+        layout.addLayout(btn_row4)
         layout.addWidget(self._summary)
         layout.addWidget(self._hint)
         layout.addWidget(self._remember_last)
@@ -810,6 +840,10 @@ class _ProfilesTab(QWidget):
         is_active = self._selected_is_active()
         self._switch_btn.setEnabled(item_selected and not is_active)
         self._open_btn.setEnabled(item_selected)
+        # Diff vs default: only meaningful for named profiles (the default
+        # row would diff against itself and show nothing).
+        self._diff_btn.setEnabled(item_selected and not is_default)
+        self._export_btn.setEnabled(item_selected and not is_default)
         self._rename_btn.setEnabled(item_selected and not is_default)
         self._delete_btn.setEnabled(item_selected and not is_default and not is_active)
 
@@ -908,6 +942,118 @@ class _ProfilesTab(QWidget):
             return
         self.profile_deleted.emit(path)
         self.refresh_list(self._active_path)
+
+    def _on_diff_vs_default(self) -> None:
+        """Render a unified diff of the selected profile against defaults."""
+        if self._selected_is_default():
+            return
+        path = self._selected_path()
+        if path is None:
+            return
+        from archward.config.defaults import default_config
+        from archward.config.diff import unified_diff
+        from archward.config.loader import load_config
+        from archward.ui.dialogs.diff_dialog import TextDiffDialog
+
+        try:
+            profile_cfg = load_config(path)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Diff failed", f"Could not load {path}:\n{e}")
+            return
+        diff_lines = unified_diff(
+            default_config(), profile_cfg,
+            a_label="defaults", b_label=path.stem,
+        )
+        dlg = TextDiffDialog(
+            diff_text="".join(diff_lines),
+            title=f"archward — {path.stem} vs defaults",
+            header_html=(
+                f"<b>Profile:</b> {path.stem}   <b>File:</b> {path}<br>"
+                f"<b>Comparison:</b> archward defaults → this profile"
+            ),
+            parent=self,
+        )
+        dlg.exec()
+
+    def _on_import(self) -> None:
+        """Pick a .toml file from anywhere, validate, copy into profile_dir."""
+        from archward.config.loader import load_config
+
+        src_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import profile",
+            str(Path.home()),
+            "TOML files (*.toml);;All files (*)",
+        )
+        if not src_str:
+            return
+        src = Path(src_str)
+
+        # Validate by attempting to parse the TOML through the config loader.
+        # Per-section validation errors fall back to defaults, but a wholly
+        # unreadable file gets logged and we can surface a clearer message.
+        try:
+            load_config(src)
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "Import failed",
+                f"Could not parse {src} as an archward config:\n{e}",
+            )
+            return
+
+        # Default the new profile name to the source file's stem so users
+        # who exported and re-import a roundtrip get a sensible default.
+        suggested = src.stem if config_paths.valid_profile_name(src.stem) else ""
+        name = self._prompt_for_new_name("Import profile — choose a name", default=suggested)
+        if name is None:
+            return
+        try:
+            target = config_paths.profile_config_path(name)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid name", str(e))
+            return
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import shutil
+            shutil.copyfile(src, target)
+        except OSError as e:
+            QMessageBox.critical(self, "Import failed", f"Could not copy to {target}:\n{e}")
+            return
+
+        log.info("imported profile %s → %s", src, target)
+        self.profile_created.emit(name)
+        self.refresh_list(self._active_path)
+        self._select_path(target)
+
+    def _on_export(self) -> None:
+        """Copy the selected profile to a chosen filesystem location."""
+        if self._selected_is_default():
+            return
+        src = self._selected_path()
+        if src is None:
+            return
+        default_dest = str(Path.home() / f"{src.stem}.toml")
+        dest_str, _ = QFileDialog.getSaveFileName(
+            self,
+            f"Export profile {src.stem}",
+            default_dest,
+            "TOML files (*.toml);;All files (*)",
+        )
+        if not dest_str:
+            return
+        dest = Path(dest_str)
+        try:
+            import shutil
+            shutil.copyfile(src, dest)
+        except OSError as e:
+            QMessageBox.critical(self, "Export failed", f"Could not write {dest}:\n{e}")
+            return
+        log.info("exported profile %s → %s", src, dest)
+        QMessageBox.information(
+            self, "Profile exported",
+            f"Wrote {src.stem} to:\n{dest}",
+        )
 
     # ── Sub-prompts ───────────────────────────────────────────────────────
 

@@ -181,13 +181,16 @@ path separators, no shell-meaningful characters. The default
 `config.toml` is unchanged when a profile is in use.
 
 The GUI's **Preferences → Profiles** tab also manages profiles in-place:
-list / switch / new from defaults / save current as new / rename /
-delete / open in editor. Switching reloads the running window against
-the selected profile (no restart). The default config appears as a
-switchable pseudo-profile at the top of the list (rename and delete are
-disabled for it). If you switch with unsaved edits, you'll be prompted
-to Save (writes to the *current* profile), Discard, or Cancel.
-Switching is refused while a pipeline is running.
+list / switch / open in editor / **diff vs default** / new from
+defaults / save current as new / **import** / **export** / rename /
+delete. Switching reloads the running window against the selected
+profile (no restart). The default config appears as a switchable
+pseudo-profile at the top of the list (rename, delete, diff, and
+export are disabled for it). If you switch with unsaved edits, you'll
+be prompted to Save (writes to the *current* profile), Discard, or
+Cancel. Switching is refused while a pipeline is running. Import
+validates the source TOML before copying into the profiles directory;
+export writes to wherever you choose.
 
 There's also an optional **"Remember last-used profile across launches"**
 checkbox at the bottom of the tab. When enabled, `archward-gui` launched

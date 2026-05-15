@@ -6,6 +6,43 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-05-14
+
+### Added
+
+- **"Diff vs default…" button on the Profiles tab.** Opens a modal
+  unified-diff viewer comparing the selected profile against archward
+  defaults. Useful for "what does this profile actually change?"
+  without dropping to a shell. Disabled when the default config row is
+  selected (would diff against itself). Reuses the existing
+  `_DiffHighlighter` from the .pacnew diff viewer for consistent +/-
+  coloring across the app.
+  - New pure-Python helper `archward.config.diff.unified_diff(a, b, …)`
+    serializes both `ConfigModel`s to TOML via `tomli_w` and runs the
+    output through `difflib.unified_diff`. Trivially unit-testable
+    independent of Qt; 5 new tests in `test_config_diff.py`.
+  - New `TextDiffDialog` sibling class in
+    `archward/ui/dialogs/diff_dialog.py` that takes pre-rendered diff
+    text (vs the file-reading `DiffDialog` used for .pacnew).
+
+- **"Import…" and "Export…" buttons on the Profiles tab.** Move
+  profiles between machines without dropping to a shell.
+  - **Import** opens a `QFileDialog` for a `.toml` from anywhere on
+    disk, validates it parses as an archward config, prompts for a
+    profile name (defaulting to the source filename's stem when valid),
+    and copies the file into `~/.config/archward/profiles/`. Refreshes
+    the list and selects the imported entry.
+  - **Export** opens a `QFileDialog.getSaveFileName` and copies the
+    selected profile to the chosen path. Disabled when the default
+    config row is selected.
+
+### Tests
+
+219 → **224**. New `tests/unit/test_config_diff.py` covers the diff
+helper (identical configs → empty diff, additions show as `+`,
+removals show as `-`, custom header labels, line-terminator
+invariants).
+
 ## [0.3.4] — 2026-05-14
 
 ### Added
@@ -587,7 +624,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/indyfive11/archward/releases/tag/v0.3.5
 [0.3.4]: https://github.com/indyfive11/archward/releases/tag/v0.3.4
 [0.3.3]: https://github.com/indyfive11/archward/releases/tag/v0.3.3
 [0.3.2]: https://github.com/indyfive11/archward/releases/tag/v0.3.2

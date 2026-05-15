@@ -141,3 +141,46 @@ class DiffDialog(QDialog):
         layout.addWidget(header)
         layout.addWidget(self._view, stretch=1)
         layout.addWidget(close)
+
+
+class TextDiffDialog(QDialog):
+    """Modal viewer for a *pre-rendered* unified-diff string.
+
+    Used by the Profiles tab's "Diff vs default…" affordance, where the
+    diff is computed up front from two `ConfigModel` instances (see
+    `archward.config.diff.unified_diff`). Reuses the `_DiffHighlighter`
+    for consistent +/- coloring across all diff viewers in the app.
+    """
+
+    def __init__(self, *, diff_text: str, title: str, header_html: str, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(1000, 700)
+
+        header = QLabel(header_html)
+        header.setStyleSheet("padding: 6px;")
+        header.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        self._view = QPlainTextEdit()
+        self._view.setReadOnly(True)
+        self._view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        mono = QFont("monospace")
+        mono.setStyleHint(QFont.StyleHint.TypeWriter)
+        self._view.setFont(mono)
+        self._highlighter = _DiffHighlighter(self._view.document())
+
+        if not diff_text.strip():
+            self._view.setPlainText(
+                "(no differences — this profile is identical to archward defaults)"
+            )
+        else:
+            self._view.setPlainText(diff_text)
+
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.rejected.connect(self.reject)
+        close.accepted.connect(self.accept)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(header)
+        layout.addWidget(self._view, stretch=1)
+        layout.addWidget(close)
