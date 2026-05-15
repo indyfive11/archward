@@ -148,6 +148,12 @@ def _apply_take_new(pacnew: PacnewFile, strategy: SudoStrategy) -> None:
 
     Per audit C1: a naive `mv` inherits the .pacnew's perms (typically 644 root:root),
     which would silently downgrade hardened 600 files.
+
+    v0.4.1 (F3): if chown or chmod fails AFTER the mv succeeded, restore
+    from the `.pre-archward.bak` backup. Without recovery, a partial
+    failure could leave a 600 file at 644 (exposing secrets) or with
+    wrong ownership. The backup preserves perms + ownership via `cp -a`,
+    so restoring it brings the original target back to the pre-op state.
     """
     from archward.pacman.runner import run_capture  # local import to avoid cycle
 
@@ -174,13 +180,59 @@ def _apply_take_new(pacnew: PacnewFile, strategy: SudoStrategy) -> None:
     if code != 0:
         raise RuntimeError(f"mv failed: {err.strip()}")
 
+    # From here on, the .pacnew is gone (moved over the original) and the
+    # original's pre-op state lives in `backup`. Any failure restoring
+    # ownership/mode means the live file has wrong perms — recover by
+    # copying the backup back over the target.
     code, _, err = run_capture(
         ["chown", f"{st.st_uid}:{st.st_gid}", str(orig)], strategy=strategy
     )
     if code != 0:
-        raise RuntimeError(f"chown failed: {err.strip()}")
+        chown_err = err.strip()
+        recovered = _restore_from_backup(backup, orig, strategy)
+        if recovered:
+            raise RuntimeError(
+                f"chown failed: {chown_err}. "
+                f"Original restored from {backup} (perms + ownership unchanged)."
+            )
+        raise RuntimeError(
+            f"chown failed: {chown_err}. "
+            f"Recovery from {backup} ALSO FAILED — target file may have wrong "
+            f"ownership; restore manually from {backup}."
+        )
 
     mode_str = format(st.st_mode & 0o7777, "o")
     code, _, err = run_capture(["chmod", mode_str, str(orig)], strategy=strategy)
     if code != 0:
-        raise RuntimeError(f"chmod failed: {err.strip()}")
+        chmod_err = err.strip()
+        recovered = _restore_from_backup(backup, orig, strategy)
+        if recovered:
+            raise RuntimeError(
+                f"chmod failed: {chmod_err}. "
+                f"Original restored from {backup} (perms + ownership unchanged)."
+            )
+        raise RuntimeError(
+            f"chmod failed: {chmod_err}. "
+            f"Recovery from {backup} ALSO FAILED — target file may have wrong "
+            f"mode (potential perm downgrade); restore manually from {backup}."
+        )
+
+
+def _restore_from_backup(backup: Path, target: Path, strategy: SudoStrategy) -> bool:
+    """Copy `backup` back over `target` with `cp -a`. Returns True on success.
+
+    Used by `_apply_take_new` to recover from a partial chown/chmod failure
+    after the `mv` already moved the .pacnew into place.
+    """
+    from archward.pacman.runner import run_capture  # local import to avoid cycle
+
+    code, _, err = run_capture(
+        ["cp", "-a", str(backup), str(target)], strategy=strategy
+    )
+    if code != 0:
+        log.error(
+            "recovery cp -a %s %s failed: %s",
+            backup, target, err.strip(),
+        )
+        return False
+    return True

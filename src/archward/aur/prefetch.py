@@ -24,6 +24,13 @@ log = logging.getLogger(__name__)
 _AUR_GIT_BASE = "https://aur.archlinux.org"
 _DEFAULT_TIMEOUT_S = 30
 
+# v0.4.1 (F10): cap PKGBUILD file size before loading into memory. A
+# malicious or accidentally-huge PKGBUILD (e.g. base64-encoded blob
+# embedded in the file) could otherwise OOM archward via the
+# read_text() call. 512 KiB is far above any legitimate PKGBUILD size —
+# the largest real ones in the AUR are typically well under 50 KiB.
+_MAX_PKGBUILD_BYTES = 512 * 1024
+
 
 def fetch_pkgbuild(pkg: str, *, timeout_s: int = _DEFAULT_TIMEOUT_S) -> str | None:
     """Clone `pkg`'s AUR repo shallowly into a temp dir; return PKGBUILD content.
@@ -56,6 +63,17 @@ def fetch_pkgbuild(pkg: str, *, timeout_s: int = _DEFAULT_TIMEOUT_S) -> str | No
         pkgbuild = target / "PKGBUILD"
         if not pkgbuild.exists():
             log.warning("no PKGBUILD found in cloned repo for %s", pkg)
+            return None
+        try:
+            size = pkgbuild.stat().st_size
+        except OSError as e:
+            log.warning("failed to stat PKGBUILD for %s: %s", pkg, e)
+            return None
+        if size > _MAX_PKGBUILD_BYTES:
+            log.warning(
+                "PKGBUILD for %s is %d bytes (> %d limit); refusing to load",
+                pkg, size, _MAX_PKGBUILD_BYTES,
+            )
             return None
         try:
             return pkgbuild.read_text(encoding="utf-8", errors="replace")

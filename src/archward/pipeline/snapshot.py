@@ -199,28 +199,50 @@ def _gather_configs(snap_root: Path, strategy: SudoStrategy) -> list[Path]:
 
 
 def _gather_network(snap_root: Path) -> None:
+    """Capture interface + listening-port + wireguard state.
+
+    Each subprocess has a short timeout so a broken interface or stuck
+    netlink socket can't hang the whole snapshot phase indefinitely. On
+    timeout, the section's file is written with a `(timed out)` marker
+    and the snapshot continues.
+    """
     ndir = snap_root / "network"
     ndir.mkdir(parents=True, exist_ok=True)
 
     try:
-        ip = subprocess.run(["ip", "addr"], check=False, capture_output=True, text=True).stdout
+        ip = subprocess.run(
+            ["ip", "addr"], check=False, capture_output=True, text=True, timeout=10
+        ).stdout
         _write_text(ndir / "ip-addr.txt", ip)
     except FileNotFoundError:
         pass
+    except subprocess.TimeoutExpired:
+        _write_text(ndir / "ip-addr.txt", "(ip addr timed out after 10s)\n")
+        log.warning("snapshot: `ip addr` timed out")
 
     try:
-        ss = subprocess.run(["ss", "-tlnp"], check=False, capture_output=True, text=True).stdout
+        ss = subprocess.run(
+            ["ss", "-tlnp"], check=False, capture_output=True, text=True, timeout=10
+        ).stdout
         _write_text(ndir / "listening-ports.txt", ss)
     except FileNotFoundError:
         pass
+    except subprocess.TimeoutExpired:
+        _write_text(ndir / "listening-ports.txt", "(ss -tlnp timed out after 10s)\n")
+        log.warning("snapshot: `ss -tlnp` timed out")
 
     if shutil.which("wg"):
         try:
-            wg = subprocess.run(["wg", "show"], check=False, capture_output=True, text=True)
+            wg = subprocess.run(
+                ["wg", "show"], check=False, capture_output=True, text=True, timeout=5
+            )
             if wg.returncode == 0:
                 _write_text(ndir / "wg-status.txt", wg.stdout)
         except FileNotFoundError:
             pass
+        except subprocess.TimeoutExpired:
+            _write_text(ndir / "wg-status.txt", "(wg show timed out after 5s)\n")
+            log.warning("snapshot: `wg show` timed out")
 
 
 def _gather_services(snap_root: Path, cfg: ConfigModel) -> dict[str, Path]:
@@ -256,10 +278,15 @@ def _gather_system(snap_root: Path) -> None:
     except OSError:
         pass
     try:
-        df = subprocess.run(["df", "-h"], check=False, capture_output=True, text=True).stdout
+        df = subprocess.run(
+            ["df", "-h"], check=False, capture_output=True, text=True, timeout=5
+        ).stdout
         _write_text(sysdir / "disk.txt", df)
     except FileNotFoundError:
         pass
+    except subprocess.TimeoutExpired:
+        _write_text(sysdir / "disk.txt", "(df -h timed out after 5s)\n")
+        log.warning("snapshot: `df -h` timed out (stuck mount?)")
     if Path("/etc/os-release").exists():
         _write_text(sysdir / "os-release.txt", Path("/etc/os-release").read_text())
 
@@ -281,7 +308,13 @@ def _capture_pacnew_baseline(snap_root: Path) -> None:
 
 
 def take_snapshot(cfg: ConfigModel, strategy: SudoStrategy, bus: EventBus) -> Snapshot:
-    """Take a full snapshot. Emits PHASE_LOG events along the way."""
+    """Take a full snapshot. Emits PHASE_LOG events along the way.
+
+    v0.4.1 (F8): if any gather step raises, the half-populated snapshot
+    dir is removed before re-raising. Without this cleanup a partial
+    snapshot would leak on disk forever (no `.timestamp` marker means
+    retention can't prune it). Snapshot is all-or-nothing.
+    """
     bus.emit_start(PHASE, "Capturing system state")
 
     snapshot_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -290,28 +323,39 @@ def take_snapshot(cfg: ConfigModel, strategy: SudoStrategy, bus: EventBus) -> Sn
 
     bus.emit_log(PHASE, f"Snapshot directory: {snap_root}")
 
-    bus.emit_log(PHASE, "[1/6] Packages")
-    package_files = _gather_packages(snap_root, cfg)
+    try:
+        bus.emit_log(PHASE, "[1/6] Packages")
+        package_files = _gather_packages(snap_root, cfg)
 
-    bus.emit_log(PHASE, "[2/6] Configs")
-    config_files = _gather_configs(snap_root, strategy)
+        bus.emit_log(PHASE, "[2/6] Configs")
+        config_files = _gather_configs(snap_root, strategy)
 
-    bus.emit_log(PHASE, "[3/6] Network")
-    _gather_network(snap_root)
+        bus.emit_log(PHASE, "[3/6] Network")
+        _gather_network(snap_root)
 
-    bus.emit_log(PHASE, "[4/6] Services")
-    service_files = _gather_services(snap_root, cfg)
+        bus.emit_log(PHASE, "[4/6] Services")
+        service_files = _gather_services(snap_root, cfg)
 
-    bus.emit_log(PHASE, "[5/6] System")
-    _gather_system(snap_root)
+        bus.emit_log(PHASE, "[5/6] System")
+        _gather_system(snap_root)
 
-    bus.emit_log(PHASE, "[6/6] Pacnew baseline")
-    _capture_pacnew_baseline(snap_root)
+        bus.emit_log(PHASE, "[6/6] Pacnew baseline")
+        _capture_pacnew_baseline(snap_root)
 
-    # Timestamp markers.
-    now = datetime.now()
-    (snap_root / ".timestamp").write_text(str(int(now.timestamp())) + "\n")
-    (snap_root / ".human-timestamp").write_text(now.isoformat() + "\n")
+        # Timestamp markers — written LAST so a partial dir is never
+        # marked as a real snapshot.
+        now = datetime.now()
+        (snap_root / ".timestamp").write_text(str(int(now.timestamp())) + "\n")
+        (snap_root / ".human-timestamp").write_text(now.isoformat() + "\n")
+    except BaseException as exc:
+        # Tear down the partial dir so retention doesn't have to deal
+        # with orphans, and so the user's disk doesn't fill silently.
+        log.warning(
+            "snapshot phase failed (%s: %s); removing partial dir %s",
+            type(exc).__name__, exc, snap_root,
+        )
+        shutil.rmtree(snap_root, ignore_errors=True)
+        raise
 
     info = distro.detect_distro()
     meta = SnapshotMeta(

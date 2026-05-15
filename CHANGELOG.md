@@ -6,6 +6,112 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-15
+
+**Theme: audit & reliability.** Zero new features. Three parallel deep
+audits (data integrity, promise verification, edge-case / error
+handling) produced a prioritized fix list; this release addresses
+everything CRITICAL + HIGH + the two documentation drifts they found.
+
+### Reliability
+
+- **F1 — Atomic `write_config()`.** The serializer now writes to
+  `<path>.tmp` + `os.replace()` so a mid-write failure (disk full,
+  process killed, permission change) leaves the original `config.toml`
+  intact instead of truncating it. Indirectly fixes the same issue
+  for `--detect` apply and the v0.3.3 auto-prune-services write-back,
+  both of which funnel through `write_config()`.
+
+- **F2 — Subprocess timeouts in the snapshot phase.** `ip addr`,
+  `ss -tlnp`, `wg show`, and `df -h` previously ran without timeouts;
+  a broken interface or stuck WireGuard / NFS mount could hang the
+  pipeline forever. Each now has a short timeout and degrades
+  gracefully on `TimeoutExpired` (the section's output gets a
+  `(timed out)` marker and the snapshot continues).
+
+- **F3 — Atomic pacnew Take-New.** When `chown` or `chmod` failed
+  after the `.pacnew → original` move already succeeded, the file
+  was left with the .pacnew's default perms (typically 644 root:root).
+  For files like sshd_config (mode 600) this was a silent permission
+  downgrade — a security regression. The apply now recovers from the
+  `.pre-archward.bak` on partial failure and surfaces both errors.
+
+- **F4 — Per-plugin verify timeout.** Plugins now run in a daemon
+  thread with a 30 s join timeout (`PLUGIN_TIMEOUT_S`). A hanging
+  plugin produces a synthetic `FAIL` row instead of freezing verify.
+  Mirrors the existing exception-isolation pattern; the daemon thread
+  doesn't block interpreter exit.
+
+- **F5 — `systemctl is-active` / `systemctl cat` timeouts** in
+  `archward.system.services`. A hung systemd manager used to freeze
+  the verify phase; both wrappers now return safe defaults on
+  timeout (`is_active` → False, `unit_exists` → True).
+
+- **F6 — Reboot-log fs probe timeout.** `Path(cfg.verify.reboot_log)
+  .exists()` / `.stat()` on an offline NFS mount could hang verify
+  forever. New `_call_with_timeout` helper wraps both calls; on
+  timeout we emit a `WARN` row instead of blocking.
+
+- **F7 — Hook timeout kills the process group.** Pre-fix, the hook
+  timeout killed only the shell parent; a hook that did `sleep 99 &`
+  orphaned the background sleep. Now uses `Popen(preexec_fn=os.setsid)`
+  + `os.killpg()` so the whole process group goes down.
+
+- **F8 — Snapshot partial-failure cleanup.** If any gather step
+  raised, the half-populated snapshot dir was left on disk forever
+  (retention can't prune what has no `.timestamp` marker). Snapshot
+  is now all-or-nothing: any exception triggers `shutil.rmtree()` of
+  the partial dir before re-raising.
+
+- **F9 — `$ARCHWARD_RESULT` env var for `post_verify` hooks.**
+  Documented in `docs/hooks.md` since v0.3.1 but never actually set.
+  The Discord-webhook hook template (v0.4.0 F4) actually uses
+  `$ARCHWARD_RESULT` — so the prebaked snippet was broken on a
+  fresh install. The pipeline now computes the RESULT tag *before*
+  the post_verify phase and threads it through to the hook env.
+
+- **F10 — PKGBUILD prefetch size limit.** `fetch_pkgbuild()` now
+  refuses any PKGBUILD larger than 512 KiB (returning `None`, which
+  the modal handles as a fetch failure). A malicious PKGBUILD with
+  an embedded multi-MB blob could otherwise OOM archward via
+  `read_text()`.
+
+- **F11 — Askpass-misconfigured diagnostic.** When the user sets
+  `privilege.askpass = /bad/path`, `discover_askpass()` now logs a
+  clear warning and falls back to the auto-detection chain (instead
+  of silently returning `None` and letting sudo block on a TTY the
+  GUI doesn't have).
+
+### Documentation drift
+
+- **F12 —** Removed the claim that pacnew rules can be "reordered"
+  from the v0.4.0 CHANGELOG entry. The editable table supports
+  add / edit / remove but not reordering. (Up/Down buttons are a
+  v0.5+ candidate; for now the docs match the shipped product.)
+
+- **F13 — Stale-lock recovery hint.** The pacman-db-lock FAIL
+  detail now differentiates stale vs live lock and tells the user
+  the exact recovery command for the stale case
+  (`sudo rm /var/lib/pacman/db.lck`). Live-lock case still asks
+  them to wait.
+
+### Tests
+
+288 → **325** (+37). New: `test_snapshot_timeouts`,
+`test_pacnew_apply`, `test_services_timeout`, `test_reboot_log_timeout`,
+`test_snapshot_cleanup`, `test_sudo`, `test_gates_preflight`. Extended:
+`test_config_loader` (atomic write), `test_verify_plugins`
+(per-plugin timeout), `test_hooks` (process-group kill + ARCHWARD_RESULT
+env), `test_prefetch` (size limit).
+
+### Internal
+
+- New helper `archward.pipeline.verify_phase._call_with_timeout(fn,
+  timeout_s)`: runs `fn()` on a daemon thread, returns its value or
+  raises `TimeoutError`. Used by F4 (plugin timeout) and F6 (reboot-
+  log stat timeout). Daemon thread guarantees interpreter exit isn't
+  blocked by hung callables.
+
 ## [0.4.0] — 2026-05-15
 
 **Theme: keep users in archward.** Six features close the GUI's biggest
@@ -16,7 +122,7 @@ archward's snapshot/gate/verify safety net).
 ### Added
 
 - **F1 — GUI-editable pacnew rules.** The Preferences → Pacnew tab is no
-  longer read-only; rules can be added, edited, reordered, and removed
+  longer read-only; rules can be added, edited, and removed
   via an editable table. Strategy is a per-row combo
   (`keep_ours` / `take_new` / `review_needed`). A "Restore defaults…"
   button rewinds to the 9 shipped rules after confirmation. Mirrors the

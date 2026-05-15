@@ -134,3 +134,97 @@ def test_hook_phase_tag_set_correctly() -> None:
     post = runner.run_post_verify(None, None)
     assert pre.results[0].phase == "pre_update"
     assert post.results[0].phase == "post_verify"
+
+
+# ── v0.4.1 F7: hook timeout kills the whole process group ────────────────
+
+
+def test_hook_timeout_kills_child_processes(tmp_path) -> None:
+    """A hook that backgrounds a child must have that child killed on timeout.
+
+    Regression for v0.4.1 F7 — pre-fix, `subprocess.run(timeout=)` killed
+    only the shell parent; background children spawned by the hook leaked.
+    The fix uses `preexec_fn=os.setsid` + `os.killpg()` to take down the
+    whole process group when the timeout fires.
+
+    Test shape: hook writes its background child's PID to a file, then
+    sleeps past the timeout. After the timeout fires we read the PID and
+    confirm `kill -0` on it returns ESRCH.
+    """
+    import os
+    import time as _time
+
+    pid_file = tmp_path / "child.pid"
+    # Background `sleep` then suicide the foreground with `sleep 10` so the
+    # parent shell stays alive past the configured timeout.
+    cmd = (
+        f"sleep 30 & echo $! > {pid_file}; "
+        "sleep 10"
+    )
+    cfg = HooksConfig(post_verify=(cmd,), timeout_seconds=1)
+    outcome = HookRunner(cfg).run_post_verify(None, None)
+
+    # The hook timed out as expected.
+    assert outcome.proceed is True
+    assert len(outcome.results) == 1
+    assert outcome.results[0].status is HookStatus.TIMEOUT
+
+    # The child PID was written; verify the child is GONE.
+    assert pid_file.exists(), "hook didn't get far enough to write child PID"
+    child_pid = int(pid_file.read_text().strip())
+
+    # Allow a short window for the kill to propagate.
+    deadline = _time.monotonic() + 3.0
+    alive = True
+    while _time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+            _time.sleep(0.1)
+        except ProcessLookupError:
+            alive = False
+            break
+
+    assert not alive, f"child pid {child_pid} survived hook timeout — process group kill failed"
+
+
+# ── v0.4.1 F9: ARCHWARD_RESULT env var for post_verify hooks ─────────────
+
+
+def test_archward_result_env_var_set_for_post_verify(tmp_path) -> None:
+    """post_verify hooks get $ARCHWARD_RESULT in their env when result_tag is set.
+
+    Regression: docs/hooks.md documented this env var since v0.3.1 but
+    the hook runner only set ARCHWARD_PHASE. The Discord-webhook hook
+    template (F4 of v0.4.0) actually uses $ARCHWARD_RESULT.
+    """
+    out_file = tmp_path / "result-marker.txt"
+    cmd = f'echo "RESULT=$ARCHWARD_RESULT" > {out_file}'
+    cfg = HooksConfig(post_verify=(cmd,))
+    outcome = HookRunner(cfg).run_post_verify(
+        None, None, result_tag="RESULT:SUCCESS"
+    )
+
+    assert outcome.proceed is True
+    assert outcome.results[0].status is HookStatus.PASS
+    assert out_file.read_text().strip() == "RESULT=RESULT:SUCCESS"
+
+
+def test_archward_result_env_var_omitted_when_no_tag(tmp_path) -> None:
+    """Without result_tag, the env var is not set (shell sees empty string)."""
+    out_file = tmp_path / "result-marker.txt"
+    cmd = f'echo "RESULT=${{ARCHWARD_RESULT:-UNSET}}" > {out_file}'
+    cfg = HooksConfig(post_verify=(cmd,))
+    outcome = HookRunner(cfg).run_post_verify(None, None)  # no result_tag
+
+    assert outcome.results[0].status is HookStatus.PASS
+    assert out_file.read_text().strip() == "RESULT=UNSET"
+
+
+def test_archward_phase_still_set_alongside_result(tmp_path) -> None:
+    """ARCHWARD_PHASE (existing) must continue to be set when result_tag is added."""
+    out_file = tmp_path / "env-marker.txt"
+    cmd = f'echo "$ARCHWARD_PHASE $ARCHWARD_RESULT" > {out_file}'
+    cfg = HooksConfig(post_verify=(cmd,))
+    HookRunner(cfg).run_post_verify(None, None, result_tag="RESULT:REBOOT_NEEDED")
+
+    assert out_file.read_text().strip() == "hooks_post RESULT:REBOOT_NEEDED"

@@ -36,9 +36,44 @@ from archward.system import disk, kernel, services
 
 PLUGIN_ENTRY_POINT_GROUP = "archward.verify_checks"
 
+# Per-plugin timeout — see run_verify's plugin loop (v0.4.1 F4).
+PLUGIN_TIMEOUT_S = 30
+
+# Filesystem-stat timeout for the reboot-log check (v0.4.1 F6).
+# Path.exists() / Path.stat() will block indefinitely on a stuck NFS
+# mount; this caps that wait at a few seconds.
+REBOOT_LOG_STAT_TIMEOUT_S = 3
+
 log = logging.getLogger(__name__)
 
 PHASE = "verify"
+
+
+def _call_with_timeout(fn, timeout_s: float):
+    """Run `fn()` on a daemon thread, return result or raise TimeoutError.
+
+    Used for filesystem calls that may hang (Path.exists() / stat() on
+    a stuck NFS mount, e.g.). The daemon thread keeps running on
+    timeout but doesn't block interpreter exit.
+    """
+    import threading
+    result_box: list = []
+    exc_box: list = []
+
+    def runner():
+        try:
+            result_box.append(fn())
+        except BaseException as e:  # noqa: BLE001
+            exc_box.append(e)
+
+    t = threading.Thread(target=runner, daemon=True, name="verify-fs-stat")
+    t.start()
+    t.join(timeout=timeout_s)
+    if t.is_alive():
+        raise TimeoutError(f"call exceeded {timeout_s}s")
+    if exc_box:
+        raise exc_box[0]
+    return result_box[0] if result_box else None
 
 
 def _kernel_check() -> VerifyCheck:
@@ -161,7 +196,21 @@ def _reboot_log_check(cfg: ConfigModel, snapshot_path: Path) -> VerifyCheck | No
     if not log_path:
         return None
     p = Path(log_path)
-    if not p.exists():
+    # v0.4.1 (F6): wrap fs probes in a timeout. A reboot_log on a stuck
+    # NFS mount would otherwise hang verify forever. On timeout we emit
+    # a WARN row pointing at the misconfiguration; user can fix and re-run.
+    try:
+        exists = _call_with_timeout(p.exists, REBOOT_LOG_STAT_TIMEOUT_S)
+    except TimeoutError:
+        log.warning("reboot-log path %s exists() timed out", log_path)
+        return VerifyCheck(
+            bucket="universal",
+            name="reboot-log",
+            status=CheckStatus.WARN,
+            message=f"reboot-log path {log_path} unreachable (stat timed out)",
+            detail="Check the path is on a responsive filesystem, or clear cfg.verify.reboot_log.",
+        )
+    if not exists:
         return VerifyCheck(
             bucket="universal",
             name="reboot-log",
@@ -173,7 +222,18 @@ def _reboot_log_check(cfg: ConfigModel, snapshot_path: Path) -> VerifyCheck | No
         return None
     try:
         snap_ts = int(ts_path.read_text().strip())
-        log_ts = int(p.stat().st_mtime)
+        log_ts = int(_call_with_timeout(
+            lambda: p.stat().st_mtime, REBOOT_LOG_STAT_TIMEOUT_S
+        ))
+    except TimeoutError:
+        log.warning("reboot-log path %s stat() timed out", log_path)
+        return VerifyCheck(
+            bucket="universal",
+            name="reboot-log",
+            status=CheckStatus.WARN,
+            message=f"reboot-log path {log_path} unreachable (stat timed out)",
+            detail="Check the path is on a responsive filesystem, or clear cfg.verify.reboot_log.",
+        )
     except (OSError, ValueError):
         return None
     if log_ts > snap_ts:
@@ -341,13 +401,51 @@ def run_verify(
         checks.append(_service_check(unit, dict(cfg.services.severity)))
 
     # Plugin probes: each contained — a raising plugin becomes one
-    # synthetic FAIL row, other plugins still run.
+    # synthetic FAIL row, other plugins still run. v0.4.1 (F4): each
+    # plugin also gets a per-call timeout (PLUGIN_TIMEOUT_S). Without
+    # this, a misbehaving plugin (e.g. network call with no timeout,
+    # infinite loop) would freeze the entire verify phase.
+    #
+    # Implementation: a daemon thread runs the plugin and writes into
+    # result/exc boxes; the main thread joins with a timeout. We use a
+    # raw daemon thread (not ThreadPoolExecutor) because the executor's
+    # context-manager exit blocks on shutdown(wait=True) which would
+    # negate the timeout. A hung plugin's daemon thread continues
+    # running but won't block interpreter exit.
+    import threading
     for name, fn in _discover_plugin_checkers():
         bus.emit_log(PHASE, f"running plugin check: {name}")
-        try:
-            produced = fn(cfg, snapshot)
-        except Exception as e:  # noqa: BLE001
-            log.exception("verify-check plugin %s raised", name)
+        result_box: list = []
+        exc_box: list = []
+
+        def _runner(fn=fn, cfg=cfg, snapshot=snapshot, rb=result_box, eb=exc_box):
+            try:
+                rb.append(fn(cfg, snapshot))
+            except BaseException as e:  # noqa: BLE001
+                eb.append(e)
+
+        t = threading.Thread(
+            target=_runner,
+            name=f"verify-plugin-{name}",
+            daemon=True,
+        )
+        t.start()
+        t.join(timeout=PLUGIN_TIMEOUT_S)
+        if t.is_alive():
+            log.warning(
+                "verify-check plugin %s timed out after %ss (thread left running)",
+                name, PLUGIN_TIMEOUT_S,
+            )
+            checks.append(VerifyCheck(
+                bucket="plugin",
+                name=f"plugin:{name}",
+                status=CheckStatus.FAIL,
+                message=f"plugin timed out after {PLUGIN_TIMEOUT_S}s",
+            ))
+            continue
+        if exc_box:
+            e = exc_box[0]
+            log.exception("verify-check plugin %s raised", name, exc_info=e)
             checks.append(VerifyCheck(
                 bucket="plugin",
                 name=f"plugin:{name}",
@@ -355,6 +453,7 @@ def run_verify(
                 message=f"plugin raised {type(e).__name__}: {e}",
             ))
             continue
+        produced = result_box[0] if result_box else []
         for c in produced or []:
             if not isinstance(c, VerifyCheck):
                 checks.append(VerifyCheck(

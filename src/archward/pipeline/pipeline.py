@@ -300,12 +300,13 @@ def run_pipeline(
     if cfg.verify.enabled:
         verify = verify_phase.run_verify(cfg, snapshot, bus, config_path=config_path)
         result.verify = verify
-        post_outcome = hooks.run_post_verify(None, verify)
-        result.post_hook_results = tuple(post_outcome.results)
     else:
         result.verify = None
 
     # ── Report ──────────────────────────────────────────────────────────────
+    # Computed BEFORE post_verify hooks so the result tag is available to
+    # user scripts as `$ARCHWARD_RESULT` (v0.4.1 F9). docs/hooks.md
+    # documented this env var since v0.3.1 but it was never set.
     result.summary = derive_result(
         preflight_failed=False,
         update_exit_code=result.update_exit_code,
@@ -313,6 +314,16 @@ def run_pipeline(
         verify=result.verify,
         pacnew_count=result.pacnew_count,
     )
+
+    # ── Post-verify hooks ───────────────────────────────────────────────────
+    # Run after both verify and the summary computation so hooks see the
+    # full RESULT tag via `$ARCHWARD_RESULT`.
+    if cfg.verify.enabled:
+        post_outcome = hooks.run_post_verify(
+            None, result.verify,
+            result_tag=result.summary.tag if result.summary else None,
+        )
+        result.post_hook_results = tuple(post_outcome.results)
 
     # ── Snapshot retention ──────────────────────────────────────────────────
     # Honor cfg.general.keep_snapshots — wired in v0.4.0 (F6). Failures here

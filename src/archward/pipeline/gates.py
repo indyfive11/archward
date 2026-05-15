@@ -27,17 +27,32 @@ def preflight_checks(bus: EventBus) -> list[GateResult]:
     if locked:
         msg = f"pacman database is locked by {owner}"
         bus.emit_log(PHASE_PREFLIGHT, f"FAIL {msg}")
+        # v0.4.1 (F13): give a concrete recovery hint for stale locks
+        # (no live holder) — most users don't know the exact path or
+        # that it's safe to remove once they've confirmed no pacman is
+        # running. Live-lock case still asks them to wait.
+        is_stale = owner is not None and "stale" in owner
+        if is_stale:
+            detail = (
+                "/var/lib/pacman/db.lck is present but no live pacman "
+                "process holds it (likely a previous run was killed). "
+                "After confirming no pacman / pacman-key / makepkg is "
+                "running, remove it manually: "
+                "`sudo rm /var/lib/pacman/db.lck`. "
+                "(archward never auto-removes the lock — a stale lock "
+                "can indicate a corrupted transaction.)"
+            )
+        else:
+            detail = (
+                "/var/lib/pacman/db.lck is present and held by a live "
+                "process. Wait for it to finish, then re-run archward."
+            )
         results.append(
             GateResult(
                 name="pacman-db-lock",
                 status=GateStatus.FAIL,
                 message=msg,
-                detail=(
-                    "/var/lib/pacman/db.lck is present. Wait for the holding "
-                    "process to finish, or if you suspect a stale lock, "
-                    "investigate before removing it (a stale lock can indicate "
-                    "a corrupted transaction)."
-                ),
+                detail=detail,
             )
         )
     else:

@@ -156,3 +156,57 @@ def test_merge_partial_rejects_unknown_section() -> None:
     cfg = default_config()
     with pytest.raises(ValueError, match="unknown config section"):
         merge_partial(cfg, nope=cfg.risk)  # type: ignore[arg-type]
+
+
+# ── v0.4.1 F1: atomic write_config ────────────────────────────────────
+
+
+def test_atomic_write_preserves_original_on_mid_write_failure(tmp_path: Path, monkeypatch) -> None:
+    """If tomli_w.dump raises mid-write, the original config.toml stays intact.
+
+    Regression for v0.4.1 F1 — pre-fix the writer used a direct
+    `open(path, "wb")` so a crash mid-write truncated the live file.
+    The atomic-rename implementation writes to `<path>.tmp` then
+    `os.replace()`s, so a mid-write failure leaves the original
+    untouched and the temp file cleaned up.
+    """
+    import tomli_w as _tomli_w
+    from archward.config import loader
+
+    cfg_path = tmp_path / "config.toml"
+    cfg = default_config()
+    # Seed with a sentinel write so we can detect truncation.
+    write_config(cfg, cfg_path)
+    original_bytes = cfg_path.read_bytes()
+    assert b"snapshot_max_age_minutes" in original_bytes
+
+    # Make the next tomli_w.dump raise after the temp file is opened
+    # (the failure happens during serialization, mirroring a disk-full).
+    def boom(*args, **kwargs):
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(loader.tomli_w, "dump", boom)
+
+    with pytest.raises(OSError, match="simulated disk full"):
+        write_config(cfg, cfg_path)
+
+    # Live file is intact; temp file is cleaned up.
+    assert cfg_path.read_bytes() == original_bytes
+    assert not (tmp_path / "config.toml.tmp").exists()
+
+
+def test_atomic_write_replaces_existing_file(tmp_path: Path) -> None:
+    """Sanity check the happy path: a second write actually updates the file."""
+    cfg_path = tmp_path / "config.toml"
+    cfg1 = default_config()
+    write_config(cfg1, cfg_path)
+    first = cfg_path.read_bytes()
+
+    # Modify a field, write again.
+    cfg2 = cfg1.model_copy(update={
+        "gates": cfg1.gates.model_copy(update={"snapshot_max_age_minutes": 999})
+    })
+    write_config(cfg2, cfg_path)
+    second = cfg_path.read_bytes()
+    assert first != second
+    assert b"999" in second

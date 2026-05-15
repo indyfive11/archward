@@ -319,3 +319,69 @@ class TestInlineAutoPrune:
         assert "ghost.service" not in reloaded.services.to_verify
         assert "good.service" in reloaded.services.to_verify
         assert reloaded.services.auto_prune is True  # setting itself survives
+
+
+# ── Layer 4: v0.4.1 F4 — per-plugin timeout ──────────────────────────────
+
+
+class TestPluginTimeout:
+    """A misbehaving plugin (hangs forever) must NOT freeze verify.
+
+    The timeout wrapper around the plugin call returns a synthetic FAIL
+    check identifying the timeout, mirroring the existing exception-
+    isolation pattern.
+    """
+
+    def test_plugin_that_hangs_yields_synthetic_fail(self, monkeypatch, tmp_path):
+        """Hard-hang plugin times out within PLUGIN_TIMEOUT_S (here patched to 0.5s)."""
+        import threading
+        import time
+
+        proceed = threading.Event()
+
+        def hanging_plugin(cfg, snapshot):
+            # Hold here past the timeout window. The executor's daemon
+            # thread won't terminate, but the timeout fires and verify
+            # moves on.
+            proceed.wait(timeout=5)
+            return []
+
+        monkeypatch.setattr(verify_phase, "PLUGIN_TIMEOUT_S", 0.5)
+        monkeypatch.setattr(
+            verify_phase, "_discover_plugin_checkers",
+            lambda: [("hanger", hanging_plugin)],
+        )
+        cfg = default_config()
+        t0 = time.monotonic()
+        result = verify_phase.run_verify(cfg, _make_snapshot(tmp_path), EventBus())
+        elapsed = time.monotonic() - t0
+        # Should NOT have taken 5+ seconds.
+        assert elapsed < 3.0, f"verify hung for {elapsed:.1f}s — timeout not honored"
+
+        plugin_checks = _plugin_checks(result)
+        assert len(plugin_checks) == 1
+        c = plugin_checks[0]
+        assert c.status is CheckStatus.FAIL
+        assert "timed out" in c.message
+
+        # Unblock the dangling thread so we don't leak it across tests.
+        proceed.set()
+
+    def test_plugin_that_returns_quickly_runs_normally(self, monkeypatch, tmp_path):
+        """The timeout wrapper is invisible to well-behaved plugins."""
+        def fast_plugin(cfg, snapshot):
+            return [VerifyCheck(
+                bucket="plugin",
+                name="fast",
+                status=CheckStatus.PASS,
+                message="ok",
+            )]
+        monkeypatch.setattr(
+            verify_phase, "_discover_plugin_checkers",
+            lambda: [("fast", fast_plugin)],
+        )
+        cfg = default_config()
+        result = verify_phase.run_verify(cfg, _make_snapshot(tmp_path), EventBus())
+        plugin_checks = _plugin_checks(result)
+        assert len(plugin_checks) == 1
+        assert plugin_checks[0].status is CheckStatus.PASS

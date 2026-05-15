@@ -82,3 +82,51 @@ def test_fetch_pkgbuild_missing_pkgbuild_in_repo(monkeypatch) -> None:
 
     monkeypatch.setattr(prefetch.subprocess, "run", fake_run)
     assert prefetch.fetch_pkgbuild("malformed") is None
+
+
+# ── v0.4.1 F10: PKGBUILD size limit ───────────────────────────────────────
+
+
+def test_fetch_pkgbuild_returns_none_for_oversized_file(monkeypatch, tmp_path) -> None:
+    """A PKGBUILD larger than _MAX_PKGBUILD_BYTES is refused with None.
+
+    Regression: pre-fix, read_text() loaded the entire file into memory;
+    a malicious 100 MB PKGBUILD could OOM archward.
+    """
+    from archward.aur import prefetch as pf_mod
+
+    def fake_run(argv, **kwargs):
+        target = Path(argv[-1])
+        target.mkdir(parents=True)
+        # Write a PKGBUILD just above the cap.
+        oversized = b"x" * (pf_mod._MAX_PKGBUILD_BYTES + 1)
+        (target / "PKGBUILD").write_bytes(oversized)
+
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(prefetch.subprocess, "run", fake_run)
+    assert prefetch.fetch_pkgbuild("oversized") is None
+
+
+def test_fetch_pkgbuild_accepts_normal_size(monkeypatch, tmp_path) -> None:
+    """Sanity check the cap doesn't false-positive on a normal-sized PKGBUILD."""
+    def fake_run(argv, **kwargs):
+        target = Path(argv[-1])
+        target.mkdir(parents=True)
+        # A 2 KiB realistic PKGBUILD.
+        (target / "PKGBUILD").write_text("pkgname=foo\n" + ("# comment\n" * 200))
+
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(prefetch.subprocess, "run", fake_run)
+    content = prefetch.fetch_pkgbuild("foo")
+    assert content is not None
+    assert "pkgname=foo" in content

@@ -16,6 +16,7 @@ Hand-edited files are never silently rewritten. `write_config()` is only called 
 from __future__ import annotations
 
 import logging
+import os
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -137,15 +138,36 @@ def write_config(cfg: ConfigModel, path: Path | None = None) -> Path:
 
     Returns the written path. Paths and enums are serialized as strings.
     Missing-value fields (None) are dropped — TOML cannot represent null.
+
+    The write is atomic: serialize to `<path>.tmp` then `os.replace()` it
+    onto the live path. POSIX rename(2) is atomic, so a crash mid-write
+    (or a disk-full failure during tomli_w.dump) leaves the original file
+    intact. The temp file is cleaned up on failure.
     """
     if path is None:
         path = default_config_path()
 
     path.parent.mkdir(parents=True, exist_ok=True)
     data = cfg.model_dump(mode="json", exclude_none=True)
-    # tomli_w writes binary; serialize via dump(...) to a file-like object.
-    with open(path, "wb") as f:
-        tomli_w.dump(data, f)
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with open(tmp_path, "wb") as f:
+            tomli_w.dump(data, f)
+            # fsync the data + close before the rename so the new file is
+            # durable. Otherwise a power-loss between rename and fsync
+            # could leave us with the rename committed but the file empty.
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        # Best-effort cleanup of the temp file on failure.
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
     log.info("wrote config to %s", path)
     return path
 

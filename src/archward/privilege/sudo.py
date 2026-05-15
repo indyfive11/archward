@@ -33,20 +33,36 @@ _ASKPASS_CANDIDATES = (
 
 
 def discover_askpass(override: str = "") -> str | None:
-    """Return the first existing askpass binary path, or None if none found."""
+    """Return the first existing askpass binary path, or None if none found.
+
+    v0.4.1 (F11): when `override` is set but invalid, log a clear warning
+    and FALL BACK to the auto-detection chain (rather than silently
+    returning None). Previously a misconfigured override silently
+    disabled askpass — sudo would then block waiting for TTY input which
+    is invisible in the GUI session.
+    """
     if override:
         if os.path.isabs(override) and os.access(override, os.X_OK):
             return override
         found = shutil.which(override)
         if found:
             return found
-        return None
+        log.warning(
+            "Configured askpass %r not found / not executable; "
+            "falling back to auto-detection.", override,
+        )
     for candidate in _ASKPASS_CANDIDATES:
         path = shutil.which(candidate)
         if path:
             return path
         if os.path.isabs(candidate) and os.access(candidate, os.X_OK):
             return candidate
+    if override:
+        log.error(
+            "No askpass binary available — sudo will block on TTY input. "
+            "Install one of %s, or configure NOPASSWD for pacman.",
+            ", ".join(_ASKPASS_CANDIDATES[:3]),
+        )
     return None
 
 
