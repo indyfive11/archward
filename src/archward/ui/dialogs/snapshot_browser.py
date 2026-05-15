@@ -360,17 +360,22 @@ class SnapshotBrowser(QDialog):
         self._render_detail(snap_path)
 
     def _render_detail(self, snap_path: Path) -> None:
-        ts = _read_timestamp(snap_path)
-        kernel = _read_first_line(snap_path / "system" / "kernel-running.txt")
-        helper = _read_first_line(snap_path / "system" / "helper.txt")
-        # Pull distro ID from os-release.txt (KEY=VALUE format).
-        distro_id = ""
-        osr = snap_path / "system" / "os-release.txt"
-        if osr.exists():
-            for line in osr.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("ID="):
-                    distro_id = line.split("=", 1)[1].strip().strip('"')
-                    break
+        # v0.4.3: single source of truth for snapshot reconstruction.
+        # load_snapshot_from_disk parses .timestamp + system/* and yields
+        # a populated SnapshotMeta — same parser that the CLI uses.
+        from archward.pipeline.snapshot import load_snapshot_from_disk
+
+        snap = load_snapshot_from_disk(snap_path)
+        if snap is None:
+            ts = None
+            kernel = ""
+            helper = ""
+            distro_id = ""
+        else:
+            ts = snap.meta.created_at
+            kernel = snap.meta.kernel_release
+            helper = snap.meta.helper_detected or ""
+            distro_id = snap.meta.distro_id
         # Bootable kernel packages installed at snapshot time. v0.2.0+
         # snapshots record these in critical.txt; pre-v0.2.0 snapshots have
         # the data in all.txt and we recover it via fnmatch — same kernel

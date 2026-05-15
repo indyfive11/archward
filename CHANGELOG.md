@@ -6,6 +6,124 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-05-15
+
+**CLI parity with the GUI Snapshot Browser** plus a post-reboot verify
+mode. Both address the same use case: a kernel / driver / pacnew update
+that broke at next boot, and the user is stuck in tty1 without the GUI.
+
+### Added
+
+- **`archward verify [--snapshot ID]`** — re-runs the verify phase
+  against the latest snapshot (or a specific one). No new snapshot is
+  taken; no update is performed. The post-reboot diagnostic — catches
+  failures that only manifest after reboot (DKMS modules that didn't
+  rebuild, pacnew left unmerged, mkinitcpio hooks, systemd unit syntax
+  changes). Plugins (e.g. the bundled `archward-verify-zerotier`
+  example) run in this mode too — the verify view's plugin bucket
+  populates exactly as in the full pipeline.
+
+- **`archward snapshot {list,show,prune}`** — TTY-friendly snapshot
+  inspection. `list` is newest-first with timestamps + age, distro,
+  kernel, captured-config count (default 20 newest, `--all` for full).
+  `show <id>` dumps the meta block + captured configs + critical
+  packages with versions. `prune [--keep N]` is a thin wrapper around
+  the existing retention helper, with a stdin Y/N confirm unless
+  `--yes` is passed.
+
+- **`archward rollback {config,package,all-configs,all-packages}`** —
+  full Snapshot-Browser CLI parity for recovery operations. `config
+  <id> <filename>` restores a single captured file to its /etc
+  location (perm-preserving via the existing `restore_config`
+  primitive). `package <id> <pkg>` downgrades a single package to its
+  snapshot version from `/var/cache/pacman/pkg/`. `all-configs <id>`
+  and `all-packages <id>` are bulk variants that auto-take a
+  pre-rollback snapshot first (matching the GUI's v0.2.2 rollback-of-
+  rollback behavior).
+
+  Boot-critical packages (glibc, systemd, openssl, etc.) require BOTH
+  `--confirm-boot-critical` AND a case-sensitive `YES` typed on stdin
+  — matches the GUI's Type-YES friction gate. The existing `--yes`
+  flag does NOT auto-confirm the boot-critical gate; that's an
+  intentionally separate friction layer.
+
+- **`archward pacnew {list,diff,apply}`** — manual `.pacnew`
+  resolution from the CLI. `list` shows the live `.pacnew` files with
+  their classified-strategy + note. `diff <path>` renders a unified
+  diff (accepts either the live or the `.pacnew` path). `apply <path>
+  --strategy=keep_ours|take_new|edit|leave` mirrors the GUI's per-row
+  Pacnew view buttons.
+
+- **REBOOT_NEEDED breadcrumb in the report text + desktop
+  notification.** When the pipeline emits `RESULT:REBOOT_NEEDED`, the
+  CLI report (and the rotating `archward.log`) now lists the post-
+  reboot commands explicitly — including the "if your desktop fails
+  to come back, drop to tty1" path with `archward snapshot list`,
+  `archward verify`, and `archward rollback package <id> <pkg>`. The
+  desktop notification has a one-line summary so it doesn't crowd
+  libnotify.
+
+### Changed
+
+- **`cli.py` restructured to use `argparse.add_subparsers()`.**
+  Backward compatible — bare `archward` (no subcommand) still runs the
+  full pipeline; every existing flag (`--dry-run`, `--auto`, `--yes`,
+  `--detect`, `--write-config`, `--no-aur`, `--profile`, `--version`)
+  parses identically. Subcommands live alongside, not instead of, the
+  flag forms.
+
+- **New `archward.pipeline.snapshot.load_snapshot_from_disk(path)`
+  helper.** Reconstructs a full `Snapshot` model from an existing
+  on-disk snapshot dir (`.timestamp` + `system/os-release.txt` +
+  `system/kernel-running.txt` + …). Used by the new CLI subcommands
+  AND by the GUI's Snapshot Browser, which previously did the same
+  parsing ad-hoc inline. Single source of truth.
+
+### Documentation
+
+- **`docs/recovery.md`** — task-oriented "my system broke, what do I
+  type" walkthrough. Covers: desktop won't come back (the tty1 path),
+  finding the responsible package from a verify FAIL, single-package
+  rollback, the no-cached-package fallback (Arch Linux Archive),
+  bulk rollback + rollback-of-rollback, the boot-critical YES gate,
+  and the won't-boot-at-all chroot path. This is the headline doc for
+  users in distress.
+- **`docs/cli.md`** — exhaustive per-subcommand reference: every flag,
+  exit code, side-effect, and example output.
+- **`man/archward.1`** — roff man page covering the flag form + all
+  subcommands. Installed to `/usr/share/man/man1/archward.1` by the
+  AUR package; `docs/cli.md` + `docs/recovery.md` install to
+  `/usr/share/doc/archward/`.
+- The `RESULT:REBOOT_NEEDED` CLI breadcrumb now ends with a pointer to
+  `man archward` / `/usr/share/doc/archward/recovery.md` for the full
+  guide. README's Subcommands + Post-reboot sections link both docs.
+
+### Internal
+
+- New package `archward.cli_subcommands` houses the four subcommand
+  modules (`verify`, `snapshot`, `rollback`, `pacnew`). Each module is
+  Qt-free by design — the CLI is the recovery path when the GUI can't
+  run, so no GUI imports allowed.
+
+### Tests
+
+329 → **395** (+66). New files:
+- `test_snapshot_loader.py` — 7 tests (round-trip, missing-marker,
+  partial dir, whitespace, future-timestamp, quoted os-release).
+- `test_cli_dispatch.py` — 20 tests (subparser routing + every
+  existing flag form's backward compatibility).
+- `test_cli_verify.py` — 7 tests (latest-snapshot resolution,
+  explicit `--snapshot ID`, missing-snapshot exit 3, exit-code
+  mapping for VERIFY_FAILED / REBOOT_NEEDED).
+- `test_cli_snapshot.py` — 10 tests (list / show / prune,
+  newest-first ordering, limit + --all).
+- `test_cli_rollback.py` — 13 tests (snapshot resolution,
+  filename → live-target mapping, boot-critical refusal without
+  flag, YES gate behavior with flag, `--yes` doesn't bypass the
+  YES gate).
+- `test_cli_pacnew.py` — 9 tests (list / diff / apply with both
+  path forms).
+
 ## [0.4.2] — 2026-05-15
 
 **Hotfix: sudo askpass appears at run start, not mid-snapshot.**

@@ -88,7 +88,12 @@ def compose_completion(result) -> Notification | None:
     elif tag == "RESULT:NEEDS_REVIEW":
         lines.append("Dry-run flagged HIGH-risk packages. Review before updating.")
     elif tag == "RESULT:REBOOT_NEEDED":
+        # v0.4.3: add a TTY recovery breadcrumb so a user who reboots into
+        # a broken desktop knows where to start. The notification stays
+        # short (libnotify truncates); the full breadcrumb also lives in
+        # archward.log via the CLI/GUI completion path.
         lines.append("Kernel updated. Reboot when convenient.")
+        lines.append("After reboot: `archward verify`. If desktop fails, drop to tty1 (Ctrl+Alt+F2).")
     elif tag == "RESULT:PACNEW_MERGE_NEEDED":
         lines.append("New .pacnew files need review.")
     elif tag == "RESULT:VERIFY_FAILED":

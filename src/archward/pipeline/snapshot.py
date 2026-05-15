@@ -396,3 +396,111 @@ def latest_snapshot(snapshot_dir: Path) -> tuple[Path, int] | None:
         return None
     age = int(datetime.now().timestamp()) - ts
     return latest, age
+
+
+# ── On-disk reconstruction (v0.4.3) ────────────────────────────────────────
+
+
+def load_snapshot_from_disk(path: Path) -> Snapshot | None:
+    """Reconstruct a Snapshot model from an existing on-disk snapshot dir.
+
+    Mirrors the per-section layout `take_snapshot` writes — see the
+    `_gather_*` functions earlier in this module. Returns None if the
+    directory doesn't carry a `.timestamp` marker (the canonical
+    "this is a complete snapshot" signal that retention.py and
+    latest_snapshot also rely on).
+
+    Used by the v0.4.3 CLI subcommands (`archward verify`,
+    `archward rollback ...`) to operate on past snapshots without
+    taking a new one, and (after the v0.4.3 refactor) by the GUI's
+    Snapshot Browser so there's a single source of truth for the
+    parsing pattern.
+
+    Missing per-section files are tolerated — a snapshot whose
+    `system/os-release.txt` happens to be absent still loads, just
+    with an empty `distro_id`. The function never raises; on any
+    unexpected I/O error against the `.timestamp` itself it returns
+    None and logs a warning.
+    """
+    ts_path = path / ".timestamp"
+    if not ts_path.exists():
+        return None
+    try:
+        ts_epoch = int(ts_path.read_text().strip())
+    except (OSError, ValueError) as e:
+        log.warning("snapshot %s has unreadable .timestamp: %s", path, e)
+        return None
+
+    created_at = datetime.fromtimestamp(ts_epoch)
+    age_seconds = max(0, int(datetime.now().timestamp()) - ts_epoch)
+
+    # system/* — single-line files. _read_first_line handles missing paths.
+    kernel_release = _read_first_line(path / "system" / "kernel-running.txt")
+    helper_detected = _read_first_line(path / "system" / "helper.txt") or None
+
+    # os-release.txt is KEY=VALUE; extract ID=.
+    distro_id = ""
+    osr = path / "system" / "os-release.txt"
+    if osr.exists():
+        try:
+            for line in osr.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("ID="):
+                    distro_id = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+        except OSError as e:
+            log.debug("snapshot %s os-release unreadable: %s", path, e)
+
+    meta = SnapshotMeta(
+        snapshot_id=path.name,
+        created_at=created_at,
+        path=path,
+        distro_id=distro_id,
+        kernel_release=kernel_release,
+        free_disk_gb=0,  # not captured as a typed value in the snapshot
+        helper_detected=helper_detected,
+    )
+
+    # packages/, services/, configs/ — collect file paths that exist.
+    pkg_dir = path / "packages"
+    package_files: dict[str, Path] = {}
+    if pkg_dir.is_dir():
+        for key in ("explicit", "all", "aur", "pending-official", "critical"):
+            p = pkg_dir / f"{key}.txt"
+            if p.exists():
+                package_files[key] = p
+
+    svc_dir = path / "services"
+    service_files: dict[str, Path] = {}
+    if svc_dir.is_dir():
+        for key in ("running", "enabled", "to-verify-status"):
+            p = svc_dir / f"{key}.txt"
+            if p.exists():
+                service_files[key] = p
+
+    cfg_dir = path / "configs"
+    config_files: list[Path] = []
+    if cfg_dir.is_dir():
+        config_files = sorted(p for p in cfg_dir.iterdir() if p.is_file())
+
+    return Snapshot(
+        meta=meta,
+        package_files=package_files,
+        config_files=tuple(config_files),
+        service_files=service_files,
+        age_seconds=age_seconds,
+    )
+
+
+def _read_first_line(p: Path) -> str:
+    """Return the first stripped line of `p`, or empty string on any error.
+
+    Mirrors the helper in `ui/dialogs/snapshot_browser.py` so the GUI
+    can be refactored to call us instead. Public-private convention is
+    leading underscore; module-private utility, not exported via
+    __init__.
+    """
+    try:
+        with open(p, encoding="utf-8") as f:
+            return f.readline().strip()
+    except OSError:
+        return ""
