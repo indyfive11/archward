@@ -130,7 +130,14 @@ to_verify = ["sshd.service", "NetworkManager.service", ...]
 pattern = "*sshd_config*"
 strategy = "review_needed"
 
-# ... see archward --write-config for the full schema.
+[hooks]
+pre_update = []          # shell commands run before pacman -Syu
+post_verify = []         # shell commands run after the verify phase
+timeout_seconds = 60
+fail_pipeline_on_error = false   # true → non-zero pre_update hook aborts the pipeline
+
+# Plus [aur], [pacman], [verify], [privilege] sections —
+# run `archward --write-config` to emit the full schema with all defaults.
 ```
 
 The GUI's **Preferences** dialog edits this file with Pydantic validation;
