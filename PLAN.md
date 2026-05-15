@@ -829,6 +829,19 @@ repo registration) — its adapter ships with a documented "best-effort" disclai
 
 ## v2 reservations (do NOT implement now — leave seams)
 
+**All v2 reservations originally listed here have shipped.** Status:
+
+| Item | Shipped in | Notes |
+|---|---|---|
+| Hooks (`pipeline/hooks.py`) | v0.3.1 | See `docs/hooks.md` and §HookRunner in this file |
+| Profiles (`--profile NAME`) | v0.3.2 | CLI + GUI in-window switcher (Preferences → Profiles tab) |
+| Custom verify probes | v0.3.3 | `archward.verify_checks` entry-point group; plugin bucket in Verify view. See `docs/plugins.md` |
+| Auto-prune stale services on `--detect` | v0.3.3 | `ConfigDiff.service_removals` + opt-in `accept_service_removals` kwarg; both CLI and Preferences Re-detect surface a removals prompt |
+
+The original v2 sketches are kept below as historical reference — they
+describe the *seams* the implementations honored. Don't treat them as
+open TODOs.
+
 ### `pipeline/hooks.py` — no-op stub
 ```python
 class HookRunner:

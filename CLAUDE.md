@@ -50,15 +50,14 @@ The bash scripts are the **reference implementation for behavior** — read them
 
 ## v2 reservations — leave seams, do not implement
 
-Per PLAN.md §11. Most originally-reserved seams have now shipped — the remaining open seams are:
-
-- **Custom verify probes** — `Verifier.collect_checkers()` in `pipeline/verify_phase.py` is still hard-coded. v2 will scan `importlib.metadata.entry_points()` for `archward.verify_checks`.
-- **Auto-prune missing services on `--detect`** — today `--detect` only proposes service *additions*. PLAN.md §830-867 has implementation hints for surfacing stale service removals via a `service_removals` field on `ConfigDiff`.
+Per PLAN.md §11. All originally-reserved seams have now shipped.
 
 Originally reserved, now shipped (do not reintroduce as TODOs):
 
 - **`[hooks]` (v0.3.1)** — `HookRunner` runs pre-update + post-verify shell hooks with `HookResult` capture, GUI rail rows, and a Verify-view bucket. See `docs/hooks.md`.
 - **Profiles (v0.3.2)** — `--profile NAME` on both CLI and GUI, plus in-window Profiles tab in Preferences for list/switch/new/rename/delete.
+- **Custom verify probes (v0.3.3)** — `archward.verify_checks` entry-point group; third-party plugins contribute checks that land in a `plugin` bucket. See `docs/plugins.md`.
+- **Auto-prune stale services on `--detect` (v0.3.3)** — `--detect` now proposes removals (opt-in) for `services.to_verify` entries whose unit files no longer resolve. CLI and Preferences both surface the prompt.
 - **Preferences inline help (v0.1.2)** — every schema tab has italic help labels under each field.
 
 ## Implementation order (from PLAN.md §13)

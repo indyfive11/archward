@@ -243,8 +243,8 @@ The single-window GUI mirrors the CLI pipeline:
   HIGH/MEDIUM/LOW tree with per-package checkboxes + Proceed/Cancel
   buttons, update stream pane (shared official + AUR), pacnew table with
   per-row View Diff / Keep Ours / Take New / Edit buttons, verify grouped
-  by bucket (universal · services · hooks). The view stays on the last
-  live phase after completion.
+  by bucket (universal · services · plugin · hooks). The view stays on the
+  last live phase after completion.
 - **Log pane** (bottom, collapsible) — full text of everything the pipeline
   emitted, dual-logged to `~/.local/state/archward/logs/archward.log`.
 - **Result strip** (bottom) — slim, color-coded banner showing the final
@@ -298,6 +298,15 @@ maintenance-window blackouts. Each is a small shell command with an
 OK/WARN message convention; output renders as a `hooks` bucket in the
 Verify view. See **[`docs/hooks.md`](docs/hooks.md)** for design
 patterns and worked examples.
+
+**Extensible — third-party verify probes via Python entry points.**
+The `archward.verify_checks` entry-point group lets any
+pip-installable package contribute additional checks (in Python, with
+full access to `ConfigModel` + `Snapshot`) that land in a `plugin`
+bucket alongside the built-ins. Useful when shell hooks aren't
+expressive enough (D-Bus probes, typed HTTP retry logic, structured
+log parsing). See **[`docs/plugins.md`](docs/plugins.md)** for the
+contract and a worked `archward-verify-zfs` skeleton.
 
 **Out of scope (intentional):** running as a daemon, scheduling cron-style
 recurring updates, network-only / offline-only modes, distros not in the

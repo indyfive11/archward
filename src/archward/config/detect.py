@@ -23,6 +23,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from archward.system import services as system_services
 from archward.models.config import (
     AurConfig,
     ConfigModel,
@@ -172,6 +173,23 @@ class ConfigDiff:
     service_additions: tuple[str, ...]
     aur_disable: bool  # True if aur.enabled should flip to False
     helper_set_to: str | None  # informational — never auto-changes preference
+    # v0.3.3: stale entries currently in cfg.services.to_verify whose unit
+    # files no longer resolve. Opt-in removal mirrors the additive flow.
+    service_removals: tuple[str, ...] = ()
+
+
+def detect_stale_services(cfg: ConfigModel) -> tuple[str, ...]:
+    """Return entries in cfg.services.to_verify whose unit no longer exists.
+
+    Uses `systemctl cat <unit>` for the existence check (see
+    archward.system.services.unit_exists). Defensive: if systemctl is
+    not available the helper returns True for all units, so this
+    function yields an empty tuple and no removals are proposed.
+    """
+    return tuple(
+        u for u in cfg.services.to_verify
+        if not system_services.unit_exists(u)
+    )
 
 
 def diff_against(cfg: ConfigModel, det: DetectionResult) -> ConfigDiff:
@@ -205,11 +223,14 @@ def diff_against(cfg: ConfigModel, det: DetectionResult) -> ConfigDiff:
     # no change. If a helper IS detected, no change.
     aur_disable = det.helper is None and cfg.aur.enabled and not cfg.aur.skip
 
+    service_removals = detect_stale_services(cfg)
+
     return ConfigDiff(
         kernel_additions=kernel_additions,
         service_additions=service_additions,
         aur_disable=aur_disable,
         helper_set_to=det.helper,
+        service_removals=service_removals,
     )
 
 
@@ -219,12 +240,17 @@ def apply_detection(
     diff: ConfigDiff,
     *,
     accept_services: bool = False,
+    accept_service_removals: bool = False,
 ) -> ConfigModel:
     """Return an updated ConfigModel applying the proposed diff.
 
     `accept_services` controls whether to add detected services to to_verify.
-    The kernel and AUR changes always apply (they're additive/safe); services
-    are opt-in because the list can be long and noisy.
+    `accept_service_removals` controls whether to drop stale entries from
+    to_verify (units whose file no longer resolves). Both default off so
+    `--detect` never silently mutates the services list.
+
+    The kernel and AUR changes always apply (they're additive/safe);
+    service additions and removals are opt-in independently.
     """
     from archward.config.loader import merge_partial
 
@@ -239,9 +265,17 @@ def apply_detection(
             kernel_pattern_exclude=cfg.risk.kernel_pattern_exclude,
         )
 
-    if accept_services and diff.service_additions:
+    apply_additions = accept_services and bool(diff.service_additions)
+    apply_removals = accept_service_removals and bool(diff.service_removals)
+    if apply_additions or apply_removals:
+        current = tuple(cfg.services.to_verify)
+        if apply_removals:
+            removals = set(diff.service_removals)
+            current = tuple(u for u in current if u not in removals)
+        if apply_additions:
+            current = current + diff.service_additions
         overrides["services"] = ServicesConfig(
-            to_verify=tuple(cfg.services.to_verify) + diff.service_additions,
+            to_verify=current,
             severity=dict(cfg.services.severity),
         )
 

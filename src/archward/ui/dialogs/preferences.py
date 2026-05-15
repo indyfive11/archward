@@ -279,6 +279,8 @@ class _ServicesTab(_Tab):
         btn_row.addWidget(del_btn)
         btn_row.addStretch(1)
 
+        self._auto_prune = QCheckBox("Auto-prune stale entries during verify")
+
         layout = QVBoxLayout(self)
         layout.addWidget(_lbl("Services to verify (one per line; default severity is 'critical'):"))
         layout.addWidget(self._to_verify, stretch=2)
@@ -291,6 +293,10 @@ class _ServicesTab(_Tab):
         if severity_help.text():
             layout.addWidget(severity_help)
         layout.addLayout(btn_row)
+        layout.addWidget(self._auto_prune)
+        auto_prune_help = _help_label(help_text.get("services", "auto_prune"))
+        if auto_prune_help.text():
+            layout.addWidget(auto_prune_help)
 
     def _remove_selected_severity(self) -> None:
         rows = sorted({i.row() for i in self._severity.selectedIndexes()}, reverse=True)
@@ -305,6 +311,7 @@ class _ServicesTab(_Tab):
             self._severity.insertRow(row)
             self._severity.setItem(row, 0, QTableWidgetItem(unit))
             self._severity.setItem(row, 1, QTableWidgetItem(sev))
+        self._auto_prune.setChecked(cfg.services.auto_prune)
 
     def dump(self) -> ServicesConfig:
         severity: dict[str, str] = {}
@@ -318,6 +325,7 @@ class _ServicesTab(_Tab):
         return ServicesConfig(
             to_verify=_lines_to_tuple(self._to_verify.toPlainText()),
             severity=severity,
+            auto_prune=self._auto_prune.isChecked(),
         )
 
 
@@ -1046,6 +1054,7 @@ class PreferencesDialog(QDialog):
         if (
             not diff.kernel_additions
             and not diff.service_additions
+            and not diff.service_removals
             and not diff.aur_disable
         ):
             QMessageBox.information(
@@ -1062,20 +1071,56 @@ class PreferencesDialog(QDialog):
             lines.append(
                 f"+ services.to_verify: add {len(diff.service_additions)} service(s)"
             )
+        if diff.service_removals:
+            preview = ", ".join(diff.service_removals[:3])
+            if len(diff.service_removals) > 3:
+                preview += f", … (+{len(diff.service_removals) - 3} more)"
+            lines.append(
+                f"- services.to_verify: remove {len(diff.service_removals)} stale unit(s): {preview}"
+            )
         if diff.aur_disable:
             lines.append("+ aur.enabled = false  (no AUR helper detected)")
 
+        # The additions prompt and the removals prompt are independent so
+        # the user can take one but skip the other — same axis-split as
+        # the CLI's --detect.
         button = QMessageBox.question(
             self,
             "Re-detect — proposed changes",
             "\n".join(lines)
-            + "\n\nApply these to the current draft? "
-            "(Services additions are included; you can still Cancel without saving.)",
+            + "\n\nApply additions (kernels, services, AUR) to the current draft? "
+            "(You can still Cancel before Save.)",
         )
-        if button != QMessageBox.StandardButton.Yes:
+        accept_additions = button == QMessageBox.StandardButton.Yes
+
+        accept_removals = False
+        if diff.service_removals:
+            r_button = QMessageBox.question(
+                self,
+                "Re-detect — remove stale services?",
+                f"Drop {len(diff.service_removals)} stale unit(s) from services.to_verify?\n\n"
+                "These units no longer resolve via `systemctl cat`. Removing them "
+                "is opt-in so accidental unit-file moves don't silently drop entries.",
+            )
+            accept_removals = r_button == QMessageBox.StandardButton.Yes
+
+        if not accept_additions and not accept_removals:
             return
 
-        self._cfg = apply_detection(current, det, diff, accept_services=True)
+        # Filter the diff so a "no" on either prompt actually drops those changes.
+        from archward.config.detect import ConfigDiff as _CD
+        effective = _CD(
+            kernel_additions=diff.kernel_additions if accept_additions else (),
+            service_additions=diff.service_additions if accept_additions else (),
+            aur_disable=diff.aur_disable if accept_additions else False,
+            helper_set_to=diff.helper_set_to,
+            service_removals=diff.service_removals if accept_removals else (),
+        )
+        self._cfg = apply_detection(
+            current, det, effective,
+            accept_services=accept_additions,
+            accept_service_removals=accept_removals,
+        )
         self._load_all()
 
     def _on_reset(self) -> None:

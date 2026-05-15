@@ -48,6 +48,11 @@ class ServicesConfig(BaseModel):
     to_verify: tuple[str, ...] = ()
     severity: dict[str, str] = Field(default_factory=dict)
     # severity: per-unit override; default "critical" → FAIL, "watch" → WARN
+    auto_prune: bool = False
+    # auto_prune: when True, the verify phase silently drops stale entries
+    # from to_verify and writes the pruned config back to disk. When False
+    # (default), stale entries still get a WARN row pointing the user at
+    # `archward --detect` for manual confirmation.
 
 
 class PacnewRule(BaseModel):

@@ -113,9 +113,11 @@ class VerifyView(QWidget):
             bits.append(f"  ·  hooks: {hook_fail}/{len(all_hooks)} failing")
         self._summary.setText("".join(bits))
 
-        # Verify checks bucketed by their own bucket field.
+        # Verify checks bucketed by their own bucket field. Seeding the
+        # dict fixes the render order regardless of which bucket the
+        # check list happens to surface first.
         if self._verify_result is not None:
-            buckets: dict[str, list] = {"universal": [], "services": []}
+            buckets: dict[str, list] = {"universal": [], "services": [], "plugin": []}
             for c in self._verify_result.checks:
                 buckets.setdefault(c.bucket, []).append(c)
             for bucket, checks in buckets.items():

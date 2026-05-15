@@ -98,6 +98,15 @@ HELP: dict[tuple[str, str], str] = {
         "units is `critical` → FAIL. Use `watch` for services that may "
         "legitimately be down sometimes (e.g. a periodic timer's main service)."
     ),
+    ("services", "auto_prune"): (
+        "When ON, the verify phase silently removes entries from the list "
+        "whose unit file no longer resolves (e.g. the package was "
+        "uninstalled) and writes the pruned config back to disk. When OFF "
+        "(default), stale entries surface as a WARN row pointing you to "
+        "`archward --detect` for manual confirmation. Leave OFF if you "
+        "sometimes move unit files around (rebuilds, migrations) and don't "
+        "want them silently dropped."
+    ),
 
     # ── Pacnew ─────────────────────────────────────────────────────────────
     ("pacnew", "default_strategy"): (

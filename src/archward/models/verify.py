@@ -15,7 +15,7 @@ class CheckStatus(StrEnum):
 class VerifyCheck(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    bucket: Literal["universal", "services"]
+    bucket: Literal["universal", "services", "plugin"]
     name: str
     status: CheckStatus
     message: str

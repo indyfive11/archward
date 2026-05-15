@@ -98,6 +98,7 @@ class PipelineWorker(QThread):
         prompter,
         *,
         no_aur: bool = False,
+        config_path: Path | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -107,6 +108,7 @@ class PipelineWorker(QThread):
         self.mode = mode
         self.prompter = prompter
         self.no_aur = no_aur
+        self.config_path = config_path
         self.cancel_event = threading.Event()
         self.result: PipelineResult | None = None
 
@@ -120,6 +122,7 @@ class PipelineWorker(QThread):
                 no_aur=self.no_aur,
                 cancel_event=self.cancel_event,
                 prompter=self.prompter,
+                config_path=self.config_path,
             )
         except Exception:  # noqa: BLE001
             log.exception("pipeline raised; emitting None result")
@@ -265,6 +268,7 @@ class MainWindow(QMainWindow):
             self.bus,
             mode,
             self.prompter,
+            config_path=self.config_path,
             parent=self,
         )
         self.worker.finished_with_result.connect(self._on_pipeline_done)

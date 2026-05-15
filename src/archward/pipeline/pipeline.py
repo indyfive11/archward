@@ -13,6 +13,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 from archward.events import EventBus
 from archward.models.aur import AurResult
@@ -109,6 +110,7 @@ def run_pipeline(
     no_aur: bool = False,
     cancel_event: threading.Event | None = None,
     prompter: Prompter | None = None,
+    config_path: Path | None = None,
 ) -> PipelineResult:
     """Run the full pipeline. Never raises on update failure — see PipelineResult."""
     result = PipelineResult()
@@ -286,7 +288,7 @@ def run_pipeline(
 
     # ── Verify ──────────────────────────────────────────────────────────────
     if cfg.verify.enabled:
-        verify = verify_phase.run_verify(cfg, snapshot.meta.path, bus)
+        verify = verify_phase.run_verify(cfg, snapshot, bus, config_path=config_path)
         result.verify = verify
         post_outcome = hooks.run_post_verify(None, verify)
         result.post_hook_results = tuple(post_outcome.results)

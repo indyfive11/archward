@@ -170,3 +170,108 @@ def test_diff_respects_kernel_pattern_exclude() -> None:
     diff = diff_against(cfg, det)
     # Default kernel_pattern_exclude includes linux-firmware* — must not propose adding.
     assert "linux-firmware-amdgpu" not in diff.kernel_additions
+
+
+# ── v0.3.3: auto-prune stale services on --detect ────────────────────────
+
+
+def _cfg_with_services(*units: str):
+    """Return a default_config() with services.to_verify populated to `units`."""
+    from archward.config.loader import merge_partial
+    from archward.models.config import ServicesConfig
+
+    cfg = default_config()
+    return merge_partial(
+        cfg,
+        services=ServicesConfig(to_verify=tuple(units), severity=dict(cfg.services.severity)),
+    )
+
+
+def test_detect_stale_services_filters_via_unit_exists(monkeypatch) -> None:
+    """detect_stale_services should call unit_exists for each to_verify entry
+    and return only the ones that don't exist."""
+    from archward.config import detect as detect_mod
+
+    existing = {"good.service", "another-good.service"}
+    monkeypatch.setattr(
+        detect_mod.system_services, "unit_exists",
+        lambda u: u in existing,
+    )
+
+    cfg = _cfg_with_services("good.service", "stale.service", "another-good.service", "also-stale.service")
+    stale = detect_mod.detect_stale_services(cfg)
+    assert set(stale) == {"stale.service", "also-stale.service"}
+
+
+def test_diff_against_populates_service_removals(monkeypatch) -> None:
+    """diff_against should set ConfigDiff.service_removals."""
+    from archward.config import detect as detect_mod
+
+    monkeypatch.setattr(
+        detect_mod.system_services, "unit_exists",
+        lambda u: u == "kept.service",
+    )
+
+    cfg = _cfg_with_services("kept.service", "ghost.service")
+    diff = diff_against(cfg, _det())
+    assert diff.service_removals == ("ghost.service",)
+
+
+def test_apply_detection_service_removals_opt_in(monkeypatch) -> None:
+    """accept_service_removals=True must drop the stale entries."""
+    from archward.config import detect as detect_mod
+
+    monkeypatch.setattr(
+        detect_mod.system_services, "unit_exists",
+        lambda u: u == "kept.service",
+    )
+
+    cfg = _cfg_with_services("kept.service", "ghost.service")
+    diff = diff_against(cfg, _det())
+
+    pruned = apply_detection(cfg, _det(), diff, accept_service_removals=True)
+    assert pruned.services.to_verify == ("kept.service",)
+
+
+def test_apply_detection_service_removals_off_by_default(monkeypatch) -> None:
+    """Default accept_service_removals=False keeps stale entries in place."""
+    from archward.config import detect as detect_mod
+
+    monkeypatch.setattr(
+        detect_mod.system_services, "unit_exists",
+        lambda u: u == "kept.service",
+    )
+
+    cfg = _cfg_with_services("kept.service", "ghost.service")
+    diff = diff_against(cfg, _det())
+
+    # Default (no kwarg) — removals are not applied.
+    unchanged = apply_detection(cfg, _det(), diff)
+    assert "ghost.service" in unchanged.services.to_verify
+    assert "kept.service" in unchanged.services.to_verify
+
+    # Explicit False — same outcome.
+    unchanged2 = apply_detection(cfg, _det(), diff, accept_service_removals=False)
+    assert unchanged2.services.to_verify == unchanged.services.to_verify
+
+
+def test_apply_detection_additions_and_removals_compose(monkeypatch) -> None:
+    """Additions and removals can land in a single apply_detection call."""
+    from archward.config import detect as detect_mod
+
+    monkeypatch.setattr(
+        detect_mod.system_services, "unit_exists",
+        lambda u: u in {"kept.service"},
+    )
+
+    cfg = _cfg_with_services("kept.service", "ghost.service")
+    det = _det(services=("new-one.service",))
+    diff = diff_against(cfg, det)
+    assert diff.service_removals == ("ghost.service",)
+    assert diff.service_additions == ("new-one.service",)
+
+    applied = apply_detection(
+        cfg, det, diff,
+        accept_services=True, accept_service_removals=True,
+    )
+    assert set(applied.services.to_verify) == {"kept.service", "new-one.service"}

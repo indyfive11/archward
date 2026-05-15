@@ -135,6 +135,7 @@ def _detect_command(yes: bool, config_path) -> int:
     if (
         not diff.kernel_additions
         and not diff.service_additions
+        and not diff.service_removals
         and not diff.aur_disable
     ):
         print("config already reflects detected state — no changes proposed.")
@@ -149,18 +150,27 @@ def _detect_command(yes: bool, config_path) -> int:
             print(f"      {s}")
         if len(diff.service_additions) > 10:
             print(f"      ... and {len(diff.service_additions) - 10} more")
+    if diff.service_removals:
+        print(f"  - services.to_verify: remove {len(diff.service_removals)} stale unit(s):")
+        for s in diff.service_removals[:10]:
+            print(f"      {s}  (no such unit file)")
+        if len(diff.service_removals) > 10:
+            print(f"      ... and {len(diff.service_removals) - 10} more")
     if diff.aur_disable:
         print("  + aur.enabled = false  (no AUR helper detected)")
     print()
 
     # Kernel/AUR changes are one combined prompt (both are additive/safe);
-    # services are opt-in separately because the list can be long.
+    # service additions and removals are opt-in separately so the user
+    # can accept or reject each axis without sacrificing the others.
     apply_kernel_aur = bool(diff.kernel_additions) or diff.aur_disable
     accept_kernel_aur = True
     accept_services = False
+    accept_service_removals = False
 
     if yes:
         accept_services = bool(diff.service_additions)
+        accept_service_removals = bool(diff.service_removals)
     else:
         if apply_kernel_aur:
             try:
@@ -178,6 +188,15 @@ def _detect_command(yes: bool, config_path) -> int:
                 s_answer = "n"
             accept_services = s_answer.startswith("y")
 
+        if diff.service_removals:
+            try:
+                r_answer = input(
+                    f"Remove {len(diff.service_removals)} stale service entries? [y/N] "
+                ).strip().lower()
+            except EOFError:
+                r_answer = "n"
+            accept_service_removals = r_answer.startswith("y")
+
     # Build a filtered diff so the user's "no" actually drops those changes.
     from archward.config.detect import ConfigDiff
 
@@ -186,17 +205,23 @@ def _detect_command(yes: bool, config_path) -> int:
         service_additions=diff.service_additions,  # apply_detection gates on accept_services
         aur_disable=diff.aur_disable if accept_kernel_aur else False,
         helper_set_to=diff.helper_set_to,
+        service_removals=diff.service_removals,  # apply_detection gates on accept_service_removals
     )
 
     if (
         not effective.kernel_additions
         and not (accept_services and effective.service_additions)
+        and not (accept_service_removals and effective.service_removals)
         and not effective.aur_disable
     ):
         print("no changes applied.")
         return 0
 
-    new_cfg = apply_detection(cfg, det, effective, accept_services=accept_services)
+    new_cfg = apply_detection(
+        cfg, det, effective,
+        accept_services=accept_services,
+        accept_service_removals=accept_service_removals,
+    )
     path = write_config(new_cfg, config_path)
     print(f"wrote {path}")
     return 0
@@ -233,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
             auto_yes=args.yes,
             no_aur=args.no_aur,
             cancel_event=cancel_event,
+            config_path=config_path,
         )
 
     # Final report.

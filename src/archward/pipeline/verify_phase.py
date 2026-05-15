@@ -1,4 +1,4 @@
-"""Verify phase — universal bucket only for Phase 1.
+"""Verify phase.
 
 Bucket A (universal):
   1. Kernel match  — running kernel string contains installed kernel pkg version
@@ -9,6 +9,12 @@ Bucket A (universal):
 
 Bucket B (services): single check per cfg.services.to_verify entry.
 
+Bucket C (plugin): third-party checks discovered via the
+`archward.verify_checks` entry-point group (v0.3.3+). Each entry point
+is a callable `(cfg: ConfigModel, snapshot: Snapshot) -> list[VerifyCheck]`.
+A plugin that raises is contained: the failure becomes a synthetic
+FAIL VerifyCheck so the user sees it without crashing verify.
+
 Per audit G3: the pacman.log scan does NOT use sudo (log is mode 644 by default).
 """
 
@@ -16,14 +22,19 @@ from __future__ import annotations
 
 import logging
 import re
+from importlib import metadata as importlib_metadata
 from pathlib import Path
+from typing import Callable
 
 from archward.events import EventBus
 from archward.models.config import ConfigModel
+from archward.models.snapshot import Snapshot
 from archward.models.verify import CheckStatus, VerifyCheck, VerifyResult
 from archward.pacman import query as pq
 from archward.pacman.pacnew import find_pacnew_files
 from archward.system import disk, kernel, services
+
+PLUGIN_ENTRY_POINT_GROUP = "archward.verify_checks"
 
 log = logging.getLogger(__name__)
 
@@ -181,7 +192,23 @@ def _reboot_log_check(cfg: ConfigModel, snapshot_path: Path) -> VerifyCheck | No
     )
 
 
+_STALE_MARKER = "no such unit"  # message prefix used by run_verify's auto-prune
+
+
 def _service_check(unit: str, severity_map: dict[str, str]) -> VerifyCheck:
+    # Distinguish "unit is gone" from "unit exists but is stopped". The
+    # former is a config-drift problem (file removed by package uninstall
+    # or hand-deletion); the latter is the runtime problem severity is
+    # designed for. Mixing them under "not active" makes stale entries
+    # invisible until the user runs --detect manually.
+    if not services.unit_exists(unit):
+        return VerifyCheck(
+            bucket="services",
+            name=unit,
+            status=CheckStatus.WARN,
+            message=f"{_STALE_MARKER} (file removed/uninstalled) — run `archward --detect` to clean up",
+        )
+
     active = services.is_active(unit)
     sev = severity_map.get(unit, "critical")
     if active:
@@ -205,9 +232,102 @@ def _kernel_reboot_needed(check: VerifyCheck) -> bool:
     return check.name == "kernel" and check.status is CheckStatus.WARN
 
 
-def run_verify(cfg: ConfigModel, snapshot_path: Path, bus: EventBus) -> VerifyResult:
+def _discover_plugin_checkers() -> list[tuple[str, Callable]]:
+    """Discover third-party verify checks via the entry-point group.
+
+    Each entry point is a callable with the contract
+    `(cfg: ConfigModel, snapshot: Snapshot) -> list[VerifyCheck]`.
+
+    Failures during *discovery* (e.g. plugin module import error) are
+    caught and logged; that entry point is silently dropped. Failures
+    during *invocation* are handled by run_verify().
+    """
+    discovered: list[tuple[str, Callable]] = []
+    try:
+        eps = importlib_metadata.entry_points(group=PLUGIN_ENTRY_POINT_GROUP)
+    except Exception:  # noqa: BLE001
+        log.exception("could not enumerate entry points for %s", PLUGIN_ENTRY_POINT_GROUP)
+        return discovered
+    for ep in eps:
+        try:
+            fn = ep.load()
+        except Exception:  # noqa: BLE001
+            log.exception("failed to load verify-check plugin %s", ep.name)
+            continue
+        if not callable(fn):
+            log.warning("verify-check plugin %s is not callable (%r); skipping", ep.name, type(fn))
+            continue
+        discovered.append((ep.name, fn))
+    return discovered
+
+
+def _auto_prune_stale(
+    cfg: ConfigModel,
+    config_path: Path | None,
+    bus: EventBus,
+) -> tuple[ConfigModel, VerifyCheck | None]:
+    """If cfg.services.auto_prune is enabled and config_path is provided,
+    silently drop stale entries from to_verify and persist the pruned cfg.
+
+    Returns (possibly-updated cfg, summary check). The summary check is
+    None when no pruning happens; otherwise a PASS row recording what
+    was removed so the user has audit-trail visibility.
+    """
+    from archward.config.detect import detect_stale_services
+    from archward.config.loader import merge_partial, write_config
+    from archward.models.config import ServicesConfig
+
+    if not cfg.services.auto_prune or config_path is None:
+        return cfg, None
+    stale = detect_stale_services(cfg)
+    if not stale:
+        return cfg, None
+    pruned = merge_partial(
+        cfg,
+        services=ServicesConfig(
+            to_verify=tuple(u for u in cfg.services.to_verify if u not in set(stale)),
+            severity=dict(cfg.services.severity),
+            auto_prune=cfg.services.auto_prune,
+        ),
+    )
+    try:
+        write_config(pruned, config_path)
+    except OSError as e:
+        bus.emit_log(PHASE, f"auto-prune: could not write {config_path}: {e}")
+        return cfg, VerifyCheck(
+            bucket="universal",
+            name="auto-prune",
+            status=CheckStatus.WARN,
+            message=f"failed to persist auto-prune to {config_path}: {e}",
+            detail=", ".join(stale),
+        )
+    return pruned, VerifyCheck(
+        bucket="universal",
+        name="auto-prune",
+        status=CheckStatus.PASS,
+        message=f"auto-pruned {len(stale)} stale unit(s) from services.to_verify",
+        detail=", ".join(stale),
+    )
+
+
+def run_verify(
+    cfg: ConfigModel,
+    snapshot: Snapshot,
+    bus: EventBus,
+    *,
+    config_path: Path | None = None,
+) -> VerifyResult:
     bus.emit_start(PHASE, "Verifying post-update state")
     checks: list[VerifyCheck] = []
+    snapshot_path = snapshot.meta.path
+
+    # Auto-prune runs *before* the per-service checks so the pruned cfg
+    # drives the rest of verify. Without config_path (e.g. test harness)
+    # this is a no-op; staleness still surfaces via the per-unit WARN
+    # rows from _service_check.
+    cfg, prune_check = _auto_prune_stale(cfg, config_path, bus)
+    if prune_check is not None:
+        checks.append(prune_check)
 
     checks.append(_kernel_check())
     checks.append(_pacnew_check(cfg, snapshot_path))
@@ -219,6 +339,32 @@ def run_verify(cfg: ConfigModel, snapshot_path: Path, bus: EventBus) -> VerifyRe
 
     for unit in cfg.services.to_verify:
         checks.append(_service_check(unit, dict(cfg.services.severity)))
+
+    # Plugin probes: each contained — a raising plugin becomes one
+    # synthetic FAIL row, other plugins still run.
+    for name, fn in _discover_plugin_checkers():
+        bus.emit_log(PHASE, f"running plugin check: {name}")
+        try:
+            produced = fn(cfg, snapshot)
+        except Exception as e:  # noqa: BLE001
+            log.exception("verify-check plugin %s raised", name)
+            checks.append(VerifyCheck(
+                bucket="plugin",
+                name=f"plugin:{name}",
+                status=CheckStatus.FAIL,
+                message=f"plugin raised {type(e).__name__}: {e}",
+            ))
+            continue
+        for c in produced or []:
+            if not isinstance(c, VerifyCheck):
+                checks.append(VerifyCheck(
+                    bucket="plugin",
+                    name=f"plugin:{name}",
+                    status=CheckStatus.FAIL,
+                    message=f"plugin yielded non-VerifyCheck: {type(c).__name__}",
+                ))
+                continue
+            checks.append(c)
 
     for c in checks:
         bus.emit_log(PHASE, f"{c.status.value.upper():4s} {c.bucket}/{c.name}: {c.message}")

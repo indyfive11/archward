@@ -6,6 +6,91 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-05-14
+
+### Added
+
+- **Custom verify probes via entry points.** Third-party packages can
+  contribute additional checks to the verify phase without forking
+  archward. Plugins register a callable in the `archward.verify_checks`
+  entry-point group with the contract
+  `(cfg: ConfigModel, snapshot: Snapshot) -> list[VerifyCheck]`. Each
+  produced check lands in a new third bucket `plugin` alongside the
+  existing `universal` and `services` buckets in the Verify view. A
+  raising plugin is contained — failure becomes a synthetic FAIL row
+  (`plugin raised <Class>: <message>`) so other plugins still run.
+  See [`docs/plugins.md`](docs/plugins.md) for a worked example.
+
+  - Closes the last open seam from PLAN.md §v2 around verify
+    extensibility (one remaining open item — service auto-prune —
+    landed in this same release).
+  - `VerifyCheck.bucket` Literal extended to `["universal", "services", "plugin"]`.
+  - `run_verify()` now takes the full `Snapshot` (not just the path)
+    so plugin authors don't have to re-parse on-disk snapshot state.
+  - Plugins discovered at archward start-up via
+    `importlib.metadata.entry_points(group="archward.verify_checks")`.
+    Restart archward to pick up new plugins.
+
+- **Stale service detection across three surfaces.** Before this
+  release, `archward --detect` only proposed *additions* to
+  `services.to_verify`, and if a unit was removed from disk (file
+  deleted, backing package uninstalled), it lingered in the verify
+  list and showed up as a generic `not active` FAIL with no
+  indication that the underlying problem was config drift, not a
+  stopped service. v0.3.3 closes the loop with three coordinated
+  changes:
+
+  1. **Verify-phase distinguishes "gone" from "stopped"** —
+     `_service_check` calls `unit_exists()` first. A missing unit
+     becomes a WARN (`no such unit (file removed/uninstalled) — run
+     archward --detect to clean up`), not a severity-based FAIL.
+     Every run surfaces the staleness; the message points the user
+     at the fix.
+
+  2. **`archward --detect` proposes removals** with a separate
+     `Remove N stale service entries? [y/N]` prompt (default N so
+     accidental unit-file moves don't silently drop entries). GUI
+     Preferences → Advanced → Re-detect mirrors with an independent
+     `QMessageBox.question` for the removals.
+
+  3. **Opt-in inline auto-prune** via a new
+     `services.auto_prune: bool = false` config flag. When True,
+     the verify phase silently drops stale entries from
+     `services.to_verify` AND writes the pruned config back to disk
+     in the same idempotent path `--detect` uses. A single PASS row
+     `auto-pruned N stale unit(s)` records what was removed for
+     audit-trail visibility. Off by default; configurable via the
+     Preferences → Services tab checkbox.
+
+  Helpers:
+
+  - `archward.system.services.unit_exists(unit)` uses
+    `systemctl cat --no-pager <unit>` (exit 0 = file resolves).
+  - `ConfigDiff.service_removals: tuple[str, ...]` surfaces stale
+    entries; `detect_stale_services(cfg)` filters `to_verify`
+    through `unit_exists`.
+  - `apply_detection(...)` gains `accept_service_removals: bool = False`.
+  - `run_verify(cfg, snapshot, bus, *, config_path=None)` accepts
+    an optional `config_path` so the inline auto-prune can persist
+    the pruned cfg. `run_pipeline()` accepts and threads
+    `config_path` to honor the active `--profile`.
+
+### Changed
+
+- `pipeline.run_verify(cfg, snapshot, bus)` — second positional arg is
+  now a `Snapshot` (was `Path` to the snapshot dir). Internal callers
+  updated; the prior API surface had no third-party consumers.
+
+### Tests
+
+211 passing (193 → +18). New coverage:
+- `tests/unit/test_verify_plugins.py` (13): plugin contract +
+  failure isolation (8), stale-service WARN routing (2), inline
+  auto-prune behavior (3).
+- `tests/unit/test_detect.py` (5): stale detection, diff
+  propagation, opt-in apply, default-off, additions+removals
+  compose.
+
 ## [0.3.2] — 2026-05-14
 
 ### Added
@@ -459,7 +544,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/indyfive11/archward/releases/tag/v0.3.3
 [0.3.2]: https://github.com/indyfive11/archward/releases/tag/v0.3.2
 [0.3.1]: https://github.com/indyfive11/archward/releases/tag/v0.3.1
 [0.3.0]: https://github.com/indyfive11/archward/releases/tag/v0.3.0
