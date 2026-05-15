@@ -27,9 +27,16 @@ import threading
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtWidgets import QMessageBox
 
+from archward.aur.prefetch import fetch_pkgbuild
 from archward.models.gate import GateResult
 from archward.models.update import PendingUpdate
+from archward.pacman.prompts import PromptKind, default_response
+from archward.ui.dialogs.pkgbuild_review import (
+    PkgbuildReviewDialog,
+    PkgbuildReviewResult,
+)
 from archward.ui.views.risk_view import RiskView
+from archward.ui.views.update_view import UpdateView
 
 log = logging.getLogger(__name__)
 
@@ -165,3 +172,135 @@ class GuiPrompter(QObject):
         )
         box.setDefaultButton(QMessageBox.StandardButton.No)
         return box.exec() == QMessageBox.StandardButton.Yes
+
+
+class UpdatePrompter(QObject):
+    """Bridges pacman.runner's prompt_provider contract to the inline input
+    row in UpdateView.
+
+    Mirrors GuiPrompter's pattern: worker thread calls prompt(); we emit a
+    queued signal to the main thread to surface the input row; user clicks
+    Send; UpdateView fires response_ready(str); we set the answer + event;
+    prompt() returns.
+
+    Cancellation: cancel_pending() forces an empty response which the
+    runner interprets as a SIGINT signal to the subprocess.
+    """
+
+    _show_prompt = Signal(str, str)  # (label, default) → UpdateView.show_prompt
+    _hide_prompt = Signal()           # → UpdateView.hide_prompt
+
+    def __init__(self, update_view: UpdateView, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._update_view = update_view
+        self._event = threading.Event()
+        self._answer: str = ""
+
+        # Cross-thread show/hide of the prompt row.
+        self._show_prompt.connect(self._update_view.show_prompt)
+        self._hide_prompt.connect(self._update_view.hide_prompt)
+        # User clicked Send → response_ready fires on main thread.
+        self._update_view.response_ready.connect(self._on_response)
+
+    def prompt(self, line: str, kind: PromptKind) -> str:
+        """Worker-thread blocking call. Returns the response string ('' = cancel)."""
+        if threading.current_thread() is threading.main_thread():
+            # Defensive — should never happen in production, but a CLI smoke
+            # run on the GUI prompter would deadlock here.
+            log.warning("UpdatePrompter.prompt called on main thread; auto-cancelling")
+            return ""
+        # Surface a concise label — the line itself is already in the log
+        # stream just above. KISS: show the last segment after "::" or the
+        # whole line if no marker.
+        label = line.strip()
+        if "::" in label:
+            label = label.split("::", 1)[1].strip()
+        self._event.clear()
+        self._answer = ""
+        self._show_prompt.emit(label, default_response(kind))
+        self._event.wait()
+        return self._answer
+
+    def cancel_pending(self) -> None:
+        """Force an in-flight prompt() to return '' (cancel). Called from
+        MainWindow.closeEvent so the worker can exit cleanly."""
+        self._answer = ""
+        self._hide_prompt.emit()
+        self._event.set()
+
+    @Slot(str)
+    def _on_response(self, text: str) -> None:
+        """Main-thread slot: UpdateView fired response_ready."""
+        self._answer = text
+        self._event.set()
+
+
+class _PkgbuildAnswerHolder:
+    """Mutable container for PkgbuildPrompter's BlockingQueuedConnection result."""
+
+    def __init__(self) -> None:
+        self.result: PkgbuildReviewResult = PkgbuildReviewResult.CANCEL_ALL
+
+
+class PkgbuildPrompter(QObject):
+    """Bridges the worker-thread AUR phase to the main-thread PKGBUILD review modal.
+
+    For each AUR-pending package, the worker calls `review(pkg)`. We fetch the
+    PKGBUILD content on the worker thread (network call, keeps the GUI
+    responsive), then hop to the main thread for the modal via a
+    BlockingQueuedConnection, then return the boolean approval to the worker.
+    CANCEL_ALL short-circuits the rest of the loop in the caller.
+    """
+
+    _show_modal_requested = Signal(object, object, object)  # (pkg, content, holder)
+
+    def __init__(self, main_window: QObject) -> None:
+        super().__init__(main_window)
+        self._main_window = main_window
+        self._cancel_all = False
+        self._show_modal_requested.connect(
+            self._on_show_modal,
+            Qt.ConnectionType.BlockingQueuedConnection,
+        )
+
+    def reset(self) -> None:
+        """Call before each AUR phase so a prior CANCEL_ALL doesn't leak."""
+        self._cancel_all = False
+
+    def review(self, pkg: str) -> bool:
+        """Worker-thread: fetch + review one PKGBUILD. Returns True on approve.
+
+        A CANCEL_ALL from the modal sets the prompter's internal flag;
+        callers must check `cancel_all_requested()` after each review() to
+        decide whether to stop iterating.
+        """
+        if self._cancel_all:
+            return False
+        if threading.current_thread() is threading.main_thread():
+            log.warning("PkgbuildPrompter.review called on main thread; auto-rejecting")
+            return False
+
+        # Loop on RETRY (re-fetch the PKGBUILD) until the modal returns a
+        # terminal verdict.
+        while True:
+            content = fetch_pkgbuild(pkg)
+            holder = _PkgbuildAnswerHolder()
+            self._show_modal_requested.emit(pkg, content, holder)
+            verdict = holder.result
+            if verdict is PkgbuildReviewResult.APPROVE:
+                return True
+            if verdict is PkgbuildReviewResult.REJECT:
+                return False
+            if verdict is PkgbuildReviewResult.CANCEL_ALL:
+                self._cancel_all = True
+                return False
+            # RETRY → re-enter the loop, fetch again.
+
+    def cancel_all_requested(self) -> bool:
+        return self._cancel_all
+
+    @Slot(object, object, object)
+    def _on_show_modal(self, pkg: str, content: str | None, holder) -> None:
+        """Main-thread slot. Show modal, write the result enum into holder."""
+        dlg = PkgbuildReviewDialog(pkg, content, parent=self._main_window)
+        holder.result = dlg.review()

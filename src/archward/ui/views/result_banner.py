@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
 
 from archward.pipeline.pipeline import PipelineResult
-from archward.ui.theme import status_palette
+from archward.ui.theme import brand_success_colors, status_palette
 
 
 # Tag → (severity_key, human label). The actual bg/fg colors are pulled from
@@ -29,10 +29,16 @@ _TAG_INFO = {
 
 
 def _colors_for(severity: str) -> tuple[str, str]:
-    """Return (bg, fg) CSS strings for a severity key from the active theme."""
+    """Return (bg, fg) CSS strings for a severity key from the active theme.
+
+    v0.4.0: 'success' uses the brand-themed teal palette instead of the
+    generic Bootstrap-derived green so a clean run carries archward's
+    identity color.
+    """
+    if severity == "success":
+        return brand_success_colors()
     p = status_palette()
     return {
-        "success": (p.success_bg, p.success_fg),
         "info": (p.info_bg, p.info_fg),
         "danger": (p.danger_bg, p.danger_fg),
         "neutral": (p.neutral_bg, p.neutral_fg),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 
+from archward.aur.adapters import _pacman_like
 from archward.aur.adapters.yay import YayAdapter
 
 
@@ -46,3 +47,80 @@ def test_list_pending_missing_binary(monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", raise_fnf)
     assert YayAdapter().list_pending() == []
+
+
+def _capture_argv(monkeypatch) -> dict:
+    """Stub run_streaming to capture the argv it was called with."""
+    captured = {}
+
+    def fake(argv, **kwargs):
+        captured["argv"] = list(argv)
+        captured["kwargs"] = kwargs
+        return 0, []
+
+    monkeypatch.setattr(_pacman_like, "run_streaming", fake)
+    return captured
+
+
+def test_run_update_default_noconfirm_present(monkeypatch) -> None:
+    captured = _capture_argv(monkeypatch)
+    YayAdapter().run_update(ignore=[], strategy=None, bus=None, cancel_event=None)
+    assert "--noconfirm" in captured["argv"]
+    assert "--editmenu=false" not in captured["argv"]
+    assert captured["kwargs"].get("prompt_provider") is None
+
+
+def test_run_update_interactive_drops_noconfirm_and_suppresses_menus(monkeypatch) -> None:
+    captured = _capture_argv(monkeypatch)
+
+    def fake_provider(line, kind):  # noqa: ARG001
+        return "Y"
+
+    YayAdapter().run_update(
+        ignore=[],
+        strategy=None,
+        bus=None,
+        cancel_event=None,
+        noconfirm=False,
+        prompt_provider=fake_provider,
+    )
+    argv = captured["argv"]
+    assert "--noconfirm" not in argv
+    # F3 handles PKGBUILD review in-GUI; yay's $EDITOR menus stay suppressed.
+    assert "--editmenu=false" in argv
+    assert "--diffmenu=false" in argv
+    assert "--cleanmenu=false" in argv
+    assert captured["kwargs"].get("prompt_provider") is fake_provider
+
+
+def test_run_update_ignore_packages_passes_through(monkeypatch) -> None:
+    captured = _capture_argv(monkeypatch)
+    YayAdapter().run_update(
+        ignore=["foo", "bar"], strategy=None, bus=None, cancel_event=None
+    )
+    argv = captured["argv"]
+    # Two --ignore/value pairs interleaved
+    assert argv.count("--ignore") == 2
+    assert "foo" in argv
+    assert "bar" in argv
+
+
+def test_paru_uses_skipreview_in_interactive_mode(monkeypatch) -> None:
+    """paru's PKGBUILD-review menu flag is --skipreview, NOT yay's
+    three-flag set. Regression guard so we don't accidentally pass yay
+    flags to paru when one of these helpers is the resolved one."""
+    from archward.aur.adapters.paru import ParuAdapter
+    captured = _capture_argv(monkeypatch)
+    ParuAdapter().run_update(
+        ignore=[],
+        strategy=None,
+        bus=None,
+        cancel_event=None,
+        noconfirm=False,
+    )
+    argv = captured["argv"]
+    assert "--skipreview" in argv
+    # The yay-specific flags must NOT leak into the paru invocation.
+    assert "--editmenu=false" not in argv
+    assert "--diffmenu=false" not in argv
+    assert "--cleanmenu=false" not in argv

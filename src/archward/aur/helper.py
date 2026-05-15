@@ -13,6 +13,7 @@ import threading
 from typing import Protocol
 
 from archward.events import EventBus
+from archward.pacman.runner import PromptProvider
 from archward.privilege.sudo import SudoStrategy
 
 log = logging.getLogger(__name__)
@@ -36,8 +37,16 @@ class AurHelper(Protocol):
         strategy: SudoStrategy,
         bus: EventBus,
         cancel_event: threading.Event | None,
+        *,
+        noconfirm: bool = True,
+        prompt_provider: PromptProvider | None = None,
     ) -> tuple[int, list[str]]:
-        """Run the AUR update. Returns (exit_code, captured_lines)."""
+        """Run the AUR update. Returns (exit_code, captured_lines).
+
+        `noconfirm` defaults to True for backward compatibility. When False,
+        the helper drops `--noconfirm`; the caller is expected to supply a
+        `prompt_provider` that resolves interactive prompts from the GUI.
+        """
         ...
 
 

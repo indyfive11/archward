@@ -9,9 +9,9 @@ Edit flow:
   3. Save → validate via Pydantic → write to ~/.config/archward/config.toml.
   4. Cancel → discard changes.
 
-The Pacnew rules list is shown read-only — editing the rule list requires
-direct config.toml hand-editing (Advanced tab has an "Open config.toml" shortcut
-for that). All other config is editable in-place.
+All config is editable in-place; the Advanced tab still ships an
+"Open config.toml" shortcut for users who prefer their editor for bulk
+edits, but every field has a dedicated widget in the dialog.
 """
 
 from __future__ import annotations
@@ -45,8 +45,6 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -70,6 +68,10 @@ from archward.models.config import (
     VerifyConfig,
 )
 from archward.ui.dialogs import help_text
+from archward.ui.dialogs.hook_templates import (
+    HOOK_TEMPLATES,
+    format_template_for_insertion,
+)
 
 log = logging.getLogger(__name__)
 
@@ -86,24 +88,43 @@ def _tuple_to_lines(items) -> str:
 
 
 def _open_in_editor(parent: QWidget, path: Path) -> None:
-    """Open `path` in $VISUAL / $EDITOR, falling back to xdg-open.
+    """Open `path` in the user's preferred GUI editor.
+
+    Priority order:
+      1. `$VISUAL` if explicitly set — semantically the "GUI-capable editor".
+      2. `xdg-open` — routes through freedesktop mime associations
+         (Kate/gedit/code/etc. depending on the user's setup).
+      3. `$EDITOR` as a last resort.
+
+    Why not just $EDITOR? `$EDITOR` traditionally points at a terminal
+    editor (nvim/vim/nano). Spawning a terminal editor via QProcess
+    without a TTY produces no visible window — the process exits
+    immediately. xdg-open is the freedesktop primitive for "open file
+    in the user's default app" and is what KDE/GNOME/etc. honor.
 
     Shared by the Advanced and Profiles tabs so the open-in-editor
     affordance behaves identically regardless of which file the user
     points it at.
     """
-    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
-    if editor:
-        subprocess.Popen([editor, str(path)])
-        return
-    try:
-        subprocess.Popen(["xdg-open", str(path)])
-    except FileNotFoundError:
-        QMessageBox.warning(
-            parent,
-            "No editor",
-            "Set $EDITOR or install xdg-utils to open the config file from here.",
-        )
+    candidates: list[str] = []
+    if os.environ.get("VISUAL"):
+        candidates.append(os.environ["VISUAL"])
+    candidates.append("xdg-open")
+    if os.environ.get("EDITOR"):
+        candidates.append(os.environ["EDITOR"])
+
+    for cmd in candidates:
+        try:
+            subprocess.Popen([cmd, str(path)])
+            return
+        except FileNotFoundError:
+            continue
+    QMessageBox.warning(
+        parent,
+        "No editor available",
+        "Couldn't find xdg-open, $VISUAL, or $EDITOR. Install xdg-utils "
+        "or set $VISUAL to a GUI editor (e.g. kate, gedit, code).",
+    )
 
 
 # ── Tab base ─────────────────────────────────────────────────────────────
@@ -329,25 +350,35 @@ class _ServicesTab(_Tab):
         )
 
 
+_PACNEW_STRATEGY_VALUES = ("keep_ours", "take_new", "review_needed")
+
+
 class _PacnewTab(_Tab):
     section = "pacnew"
 
     def __init__(self) -> None:
         super().__init__()
         self._default = QComboBox()
-        self._default.addItems(["keep_ours", "take_new", "review_needed"])
+        self._default.addItems(_PACNEW_STRATEGY_VALUES)
 
-        self._tree = QTreeWidget()
-        self._tree.setColumnCount(3)
-        self._tree.setHeaderLabels(["Pattern", "Strategy", "Note"])
-        self._tree.setRootIsDecorated(False)
-        self._tree.setSelectionMode(QTreeWidget.SelectionMode.NoSelection)
-        self._tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._rules = QTableWidget(0, 3)
+        self._rules.setHorizontalHeaderLabels(["Pattern", "Strategy", "Note"])
+        self._rules.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._rules.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self._rules.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._rules.verticalHeader().setVisible(False)
 
-        hint = _help_label(
-            "Pacnew rules are edited by hand in config.toml. Use the Advanced "
-            "tab's 'Open config.toml' to launch your editor."
-        )
+        add_btn = QPushButton("Add rule")
+        add_btn.clicked.connect(lambda: self._add_rule_row())
+        del_btn = QPushButton("Remove selected")
+        del_btn.clicked.connect(self._remove_selected_rules)
+        restore_btn = QPushButton("Restore defaults…")
+        restore_btn.clicked.connect(self._restore_defaults)
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(del_btn)
+        btn_row.addWidget(restore_btn)
+        btn_row.addStretch(1)
 
         form_top = QFormLayout()
         form_top.addRow("Default strategy:",
@@ -355,28 +386,76 @@ class _PacnewTab(_Tab):
 
         layout = QVBoxLayout(self)
         layout.addLayout(form_top)
-        layout.addWidget(_lbl("Rules (read-only):"))
-        layout.addWidget(self._tree, stretch=1)
-        layout.addWidget(hint)
+        layout.addWidget(_lbl("Rules — first matching pattern wins (fnmatch globs):"))
+        layout.addWidget(self._rules, stretch=1)
+        rules_help = _help_label(help_text.get("pacnew", "_section_rules"))
+        if rules_help.text():
+            layout.addWidget(rules_help)
+        layout.addLayout(btn_row)
 
-        # Preserve the loaded rules so dump() can return them unchanged.
-        self._loaded_rules: tuple = ()
+    def _add_rule_row(
+        self,
+        pattern: str = "",
+        strategy: str = "review_needed",
+        note: str = "",
+    ) -> None:
+        row = self._rules.rowCount()
+        self._rules.insertRow(row)
+        self._rules.setItem(row, 0, QTableWidgetItem(pattern))
+        combo = QComboBox()
+        combo.addItems(_PACNEW_STRATEGY_VALUES)
+        combo.setCurrentText(strategy)
+        self._rules.setCellWidget(row, 1, combo)
+        self._rules.setItem(row, 2, QTableWidgetItem(note))
+
+    def _remove_selected_rules(self) -> None:
+        rows = sorted({i.row() for i in self._rules.selectedIndexes()}, reverse=True)
+        for r in rows:
+            self._rules.removeRow(r)
+
+    def _restore_defaults(self) -> None:
+        if self._rules.rowCount() > 0:
+            answer = QMessageBox.question(
+                self,
+                "Restore default pacnew rules",
+                "Replace the current rule list with the built-in defaults? "
+                "Your custom rules will be lost.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._rules.setRowCount(0)
+        for rule in default_config().pacnew.rules:
+            self._add_rule_row(rule.pattern, rule.strategy.value, rule.note or "")
 
     def load(self, cfg: ConfigModel) -> None:
         self._default.setCurrentText(cfg.pacnew.default_strategy.value)
-        self._loaded_rules = cfg.pacnew.rules
-        self._tree.clear()
+        self._rules.setRowCount(0)
         for rule in cfg.pacnew.rules:
-            self._tree.addTopLevelItem(
-                QTreeWidgetItem([rule.pattern, rule.strategy.value, rule.note or ""])
-            )
+            self._add_rule_row(rule.pattern, rule.strategy.value, rule.note or "")
 
     def dump(self) -> PacnewConfig:
+        from archward.models.config import PacnewRule
         from archward.models.pacnew import PacnewRecommendation
 
+        rules: list[PacnewRule] = []
+        for r in range(self._rules.rowCount()):
+            pat_item = self._rules.item(r, 0)
+            note_item = self._rules.item(r, 2)
+            combo = self._rules.cellWidget(r, 1)
+            pattern = pat_item.text().strip() if pat_item else ""
+            if not pattern:
+                continue  # blank rows dropped on save
+            note_text = note_item.text().strip() if note_item else ""
+            rules.append(PacnewRule(
+                pattern=pattern,
+                strategy=PacnewRecommendation(combo.currentText()),
+                note=note_text or None,
+            ))
         return PacnewConfig(
             default_strategy=PacnewRecommendation(self._default.currentText()),
-            rules=self._loaded_rules,
+            rules=tuple(rules),
         )
 
 
@@ -529,11 +608,45 @@ class _HooksTab(_Tab):
         if section_help is not None:
             layout.addWidget(section_help)
 
-        layout.addWidget(_lbl("Pre-update hooks (run before pacman -Syu, one per line):"))
+        # ── Pre-update editor + template dropdown ─────────────────────────
+        pre_header_row = QHBoxLayout()
+        pre_header_row.addWidget(
+            _lbl("Pre-update hooks (run before pacman -Syu, one per line):")
+        )
+        pre_header_row.addStretch(1)
+        pre_template = QComboBox()
+        pre_template.addItem("Insert template…")
+        for label, (kind, _body) in HOOK_TEMPLATES.items():
+            if kind == "pre":
+                pre_template.addItem(label)
+        pre_template.currentIndexChanged.connect(
+            lambda i, combo=pre_template: self._insert_template(
+                combo, self._pre_update
+            )
+        )
+        pre_header_row.addWidget(pre_template)
+        layout.addLayout(pre_header_row)
         layout.addWidget(self._pre_update, stretch=1)
         layout.addWidget(_help_label(help_text.get("hooks", "pre_update")))
 
-        layout.addWidget(_lbl("Post-verify hooks (run after verify phase, one per line):"))
+        # ── Post-verify editor + template dropdown ────────────────────────
+        post_header_row = QHBoxLayout()
+        post_header_row.addWidget(
+            _lbl("Post-verify hooks (run after verify phase, one per line):")
+        )
+        post_header_row.addStretch(1)
+        post_template = QComboBox()
+        post_template.addItem("Insert template…")
+        for label, (kind, _body) in HOOK_TEMPLATES.items():
+            if kind == "post":
+                post_template.addItem(label)
+        post_template.currentIndexChanged.connect(
+            lambda i, combo=post_template: self._insert_template(
+                combo, self._post_verify
+            )
+        )
+        post_header_row.addWidget(post_template)
+        layout.addLayout(post_header_row)
         layout.addWidget(self._post_verify, stretch=1)
         layout.addWidget(_help_label(help_text.get("hooks", "post_verify")))
 
@@ -557,6 +670,25 @@ class _HooksTab(_Tab):
             timeout_seconds=self._timeout.value(),
             fail_pipeline_on_error=self._fail_on_error.isChecked(),
         )
+
+    def _insert_template(self, combo: QComboBox, editor: QPlainTextEdit) -> None:
+        """Append the selected template body to the editor, then reset the
+        combobox to its placeholder so the user can pick the same template
+        again if they want a second copy."""
+        idx = combo.currentIndex()
+        if idx <= 0:  # 0 = "Insert template…" placeholder
+            return
+        label = combo.currentText()
+        snippet = format_template_for_insertion(label)
+        if not snippet:
+            combo.setCurrentIndex(0)
+            return
+        existing = editor.toPlainText()
+        sep = "" if not existing or existing.endswith("\n") else "\n"
+        editor.setPlainText(existing + sep + snippet)
+        combo.blockSignals(True)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
 
 
 class _AdvancedTab(QWidget):
@@ -1480,18 +1612,24 @@ def _field_with_help(widget: QWidget, section: str, field: str) -> QWidget:
 
 
 def _section_help(section: str, key: str = "_section") -> QLabel | None:
-    """Section-level help banner shown at the top of a tab. None if missing."""
+    """Section-level help banner shown at the top of a tab. None if missing.
+
+    Styled with a brand-teal left border so every Preferences tab reads as
+    coherently themed — the banner's stripe matches the running-phase
+    stripe in the main window's phase rail.
+    """
     body = help_text.get(section, key)
     if not body:
         return None
+    from archward.ui.theme import brand_palette
+    accent = brand_palette().accent_border
     lbl = _help_label(body)
-    # Override _help_label's left indent — section banners look better
-    # flush-left with extra vertical breathing room.
     lbl.setStyleSheet(
         "color: palette(text);"
         "font-style: italic;"
         "font-size: 11px;"
-        "padding: 4px 0 8px 0;"
+        "padding: 4px 0 8px 12px;"
+        f"border-left: 3px solid {accent};"
     )
     return lbl
 

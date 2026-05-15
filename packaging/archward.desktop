@@ -9,3 +9,6 @@ Categories=System;PackageManager;Qt;
 Keywords=update;upgrade;pacman;aur;arch;snapshot;
 Terminal=false
 StartupNotify=true
+# Plasma/Wayland: associate the running window's xdg_toplevel app_id
+# with this launcher entry so the taskbar uses our icon, not a default.
+StartupWMClass=archward

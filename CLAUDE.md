@@ -1,12 +1,12 @@
 # CLAUDE.md — archward project context
 
-You've been launched in `~/dev/archward/`, a **shipped and maintained** Python/PySide6 project. v1 is complete through v0.3.5 (2026-05-14); the package is live on the AUR as `archward`. This file gives you the operational context for further maintenance / bug fixes / v0.4+ work.
+You've been launched in `~/dev/archward/`, a **shipped and maintained** Python/PySide6 project. v0.4.0 just shipped (2026-05-15) — the package is live on the AUR as `archward`. This file gives you the operational context for further maintenance / bug fixes / v0.5+ work.
 
 **Read first if you're new to the project:** [`CHANGELOG.md`](./CHANGELOG.md) for what's shipped, [`README.md`](./README.md) for user-facing surface, [`PLAN.md`](./PLAN.md) for historical design rationale (v1 is shipped — PLAN is reference, not a TODO).
 
 ## What is archward?
 
-A safe-update GUI for Arch-based Linux distributions (Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix). Pipeline order (as of v0.3.5):
+A safe-update GUI for Arch-based Linux distributions (Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix). Pipeline order (as of v0.4.0):
 
 1. Pre-flight (`db.lck` + single-instance lock)
 2. Snapshot (packages, configs, services, network state, pacnew baseline)
@@ -65,6 +65,12 @@ Per PLAN.md §11. Every originally-reserved v2 seam plus every post-release poli
 - **Stale-service detection, three surfaces (v0.3.3)** — verify-phase WARN row distinguishes "no such unit" from "not active"; `archward --detect` proposes opt-in removals; `services.auto_prune` config flag enables inline auto-prune with persistent write-back.
 - **Remember-last-used profile (v0.3.4)** — opt-in QSettings toggle in Preferences → Profiles; backed by `archward.ui.persistent_state`. State lives in `~/.config/archward/archward.conf`, separate from any profile's TOML.
 - **Profiles tab management (v0.3.5)** — "Diff vs default" modal, "Import…" and "Export…" buttons. Diff helper at `archward.config.diff.unified_diff()`.
+- **GUI-editable pacnew rules (v0.4.0)** — `_PacnewTab` is now an editable `QTableWidget` (Pattern / Strategy combo / Note) with Add / Remove / Restore-defaults. Help text no longer says "edit by hand in config.toml."
+- **In-GUI pacman/AUR interactive prompts (v0.4.0)** — when `pacman.noconfirm=False`, archward routes pacman/yay/paru through a PTY, detects `[Y/n]` / provider-selection prompts via `archward.pacman.prompts.PROMPT_PATTERNS`, and surfaces them in an inline input row at the bottom of `UpdateView`. New `UpdatePrompter` mirrors the proven `GuiPrompter` cross-thread pattern.
+- **PKGBUILD review modal (v0.4.0)** — when `noconfirm=False`, the AUR phase pre-fetches each pending PKGBUILD (`git clone --depth=1` of `aur.archlinux.org/<pkg>.git`) and shows a per-package modal with Approve / Reject / Cancel-review. Rejected packages → `--ignore`. See `archward/aur/prefetch.py` + `archward/ui/dialogs/pkgbuild_review.py`.
+- **Hook templates (v0.4.0)** — `_HooksTab` gets an "Insert template…" combobox per editor. 4 prebaked snippets in `archward/ui/dialogs/hook_templates.py` (btrfs snapshot, stale-backup gate, Discord webhook, user-services restart). Append-on-select with `# template: <name>` header.
+- **Verify failure remediation hints (v0.4.0)** — Verify view's 4th column shows a "What to do?" button on FAIL rows with a registered hint. Hints live in `help_text.HELP` under the `verify_hint` section.
+- **Snapshot retention (v0.4.0)** — the `keep_snapshots` setting (GUI-exposed but no-op since v0.1.0) now actually runs at end-of-pipeline. Snapshot browser also gets a "Prune now…" button. Logic in `archward/pipeline/retention.py`.
 - **Preferences inline help (v0.1.2 + ongoing)** — every schema tab has italic help labels under each field, with `_section_help()` intros on the more involved tabs.
 
 ## Implementation history (PLAN.md §13 — completed)
@@ -122,7 +128,7 @@ Rob has an extensive memory system at `/home/rob/.claude/projects/-home-rob/memo
 
 ## AUR package — release workflow
 
-archward ships as `archward` on the AUR (live since v0.3.2, currently at v0.3.5 as of 2026-05-14).
+archward ships as `archward` on the AUR (live since v0.3.2, currently at v0.4.0 as of 2026-05-15).
 **Page:** https://aur.archlinux.org/packages/archward
 **Maintainer:** `indyfive11`
 **Installable:** `yay -S archward`

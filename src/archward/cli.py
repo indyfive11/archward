@@ -342,6 +342,21 @@ def main_gui(argv: list[str] | None = None) -> int:
     app.setApplicationName("archward")            # unix identity — used for QSettings paths
     app.setApplicationDisplayName("Archward")     # human-readable name shown in title bars
     app.setOrganizationName("archward")
+    # Wayland app_id ⇒ Plasma associates the running window with the
+    # .desktop launcher (matches StartupWMClass=archward). Without this
+    # the taskbar can't find our icon and falls back to a generic one.
+    app.setDesktopFileName("archward")
+    # Belt-and-suspenders: set the QIcon explicitly so X11 and any path
+    # that doesn't go through xdg_toplevel.set_app_id also gets the
+    # shield+A artwork.
+    from archward.ui.icon import archward_icon
+    app.setWindowIcon(archward_icon())
+    # NOTE — earlier v0.4.0 work overrode QPalette::Highlight to brand
+    # teal. That caused ApplicationPaletteChange events to cascade across
+    # every widget and interacted badly with Plasma's Wayland theme
+    # propagation (visible blackouts during heavy paint traffic). The
+    # win was small; brand accents are now applied to specific widgets
+    # that benefit, never globally via the palette.
 
     # If --profile was NOT specified explicitly, consult the QSettings
     # remember-last-used flag and use the previously-active profile.

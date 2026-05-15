@@ -11,12 +11,26 @@ from __future__ import annotations
 
 import logging
 import os
+import pty
+import select
+import signal
 import subprocess
 import threading
+from typing import Callable
 
 from archward.events import EventBus
 from archward.logging_setup import strip_ansi
+from archward.pacman.prompts import PromptKind, detect_prompt
 from archward.privilege.sudo import SudoStrategy
+
+# Idle threshold (seconds) before a partial-line buffer is checked against
+# PROMPT_PATTERNS. Pacman flushes prompts immediately; 200ms is comfortable
+# headroom over the worst-case stdio latency without making the UI laggy.
+_PROMPT_IDLE_S = 0.2
+
+# Type of the optional GUI callback that resolves prompts. Signature is
+# (line, kind) → response_string. Returning "" cancels the subprocess.
+PromptProvider = Callable[[str, PromptKind], str]
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +60,7 @@ def run_streaming(
     phase: str,
     cancel_event: threading.Event | None = None,
     use_sudo: bool = True,
+    prompt_provider: PromptProvider | None = None,
 ) -> tuple[int, list[str]]:
     """Run `argv`, stream stdout into the EventBus, return (exit_code, captured_lines).
 
@@ -54,8 +69,17 @@ def run_streaming(
     pass `use_sudo=False`: the helper inherits SUDO_ASKPASS via env and prompts
     for sudo internally when it needs to install built packages.
 
-    pacman/AUR helpers are never killed mid-flight. `cancel_event` only suppresses
-    further log emission — see the cancellation contract in PLAN.md.
+    When `prompt_provider is None` (default), uses the legacy pipe-based path:
+    pacman runs with --noconfirm, output streams one-way, cancel_event only
+    suppresses further log emission (subprocess is never killed mid-flight to
+    avoid half-transactions corrupting the pacman DB).
+
+    When `prompt_provider` is set, uses a PTY-backed path so pacman flushes
+    interactive prompts. Buffered partial lines are matched against
+    `prompts.PROMPT_PATTERNS`; on a match, `prompt_provider(line, kind)` is
+    invoked and its return string is written to the subprocess stdin. A
+    returned empty string signals cancellation — the subprocess group gets
+    SIGINT, which pacman handles cleanly between transactions (no DB damage).
     """
     full = [*strategy.argv_prefix(), *argv] if use_sudo else list(argv)
     env = strategy.env()
@@ -64,6 +88,18 @@ def run_streaming(
     log.info("running: %s", " ".join(full))
     bus.emit_log(phase, "$ " + " ".join(full))
 
+    if prompt_provider is None:
+        return _run_pipe(full, env, bus, phase, cancel_event)
+    return _run_pty(full, env, bus, phase, cancel_event, prompt_provider)
+
+
+def _run_pipe(
+    full: list[str],
+    env: dict[str, str],
+    bus: EventBus,
+    phase: str,
+    cancel_event: threading.Event | None,
+) -> tuple[int, list[str]]:
     proc = subprocess.Popen(
         full,
         stdout=subprocess.PIPE,
@@ -92,6 +128,133 @@ def run_streaming(
     code = proc.wait()
     log.info("exited %d: %s", code, " ".join(full))
     return code, captured
+
+
+def _run_pty(
+    full: list[str],
+    env: dict[str, str],
+    bus: EventBus,
+    phase: str,
+    cancel_event: threading.Event | None,
+    prompt_provider: PromptProvider,
+) -> tuple[int, list[str]]:
+    """Interactive path: PTY-backed subprocess with prompt detection.
+
+    Layout:
+      - pty.openpty() yields (master_fd, slave_fd).
+      - Subprocess gets slave_fd as stdin/stdout/stderr and runs in its own
+        session (preexec_fn=os.setsid) so SIGINT can be sent to the process
+        group cleanly on user cancel.
+      - Reader loop: select on master_fd with _PROMPT_IDLE_S timeout. On
+        data, accumulate into a line buffer; emit each complete line. On
+        idle, check the buffer against PROMPT_PATTERNS; on match, invoke
+        prompt_provider and write the response (or SIGINT on empty).
+    """
+    master_fd, slave_fd = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            full,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            preexec_fn=os.setsid,
+            close_fds=True,
+            env=env,
+        )
+    except Exception:
+        # Popen failed (e.g. argv[0] missing). Release both PTY fds.
+        os.close(slave_fd)
+        os.close(master_fd)
+        raise
+    # Parent doesn't need the slave fd; the child has its own dup.
+    os.close(slave_fd)
+
+    captured: list[str] = []
+    buffer = ""
+    cancelled = False
+    decoder_errors = "replace"
+
+    try:
+        while True:
+            try:
+                r, _, _ = select.select([master_fd], [], [], _PROMPT_IDLE_S)
+            except (OSError, ValueError):
+                break
+
+            if master_fd in r:
+                try:
+                    chunk = os.read(master_fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                buffer += chunk.decode("utf-8", errors=decoder_errors)
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    cleaned = strip_ansi(line.rstrip("\r"))
+                    captured.append(cleaned)
+                    if cancel_event is not None and cancel_event.is_set():
+                        if not cancelled:
+                            bus.emit_log(phase, "(cancellation requested)")
+                            cancelled = True
+                    else:
+                        bus.emit_log(phase, cleaned)
+            else:
+                # idle — partial-line buffer is the prompt candidate
+                if cancel_event is not None and cancel_event.is_set() and not cancelled:
+                    bus.emit_log(phase, "(cancellation requested)")
+                    cancelled = True
+                    _send_sigint(proc)
+                    continue
+                if not buffer:
+                    continue
+                cleaned_buf = strip_ansi(buffer.rstrip("\r"))
+                kind = detect_prompt(cleaned_buf)
+                if kind is None:
+                    continue
+                # Surface the prompt line itself in the log so the user sees
+                # what they're answering, then call the provider (blocking).
+                bus.emit_log(phase, cleaned_buf)
+                try:
+                    response = prompt_provider(cleaned_buf, kind)
+                except Exception:  # noqa: BLE001 — provider must never crash the runner
+                    log.exception("prompt_provider raised; treating as cancel")
+                    response = ""
+                buffer = ""
+                if response == "":
+                    bus.emit_log(phase, "(user cancelled at prompt — sending SIGINT)")
+                    _send_sigint(proc)
+                    continue
+                payload = response if response.endswith("\n") else response + "\n"
+                try:
+                    os.write(master_fd, payload.encode("utf-8"))
+                except OSError:
+                    break
+
+        # Flush any final partial-line buffer
+        if buffer:
+            cleaned = strip_ansi(buffer.rstrip("\r\n"))
+            if cleaned:
+                captured.append(cleaned)
+                if not (cancel_event is not None and cancel_event.is_set()):
+                    bus.emit_log(phase, cleaned)
+    finally:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+
+    code = proc.wait()
+    log.info("exited %d (pty): %s", code, " ".join(full))
+    return code, captured
+
+
+def _send_sigint(proc: subprocess.Popen) -> None:
+    """Best-effort SIGINT to the subprocess group; ignored if already gone."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 def run_capture(

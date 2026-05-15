@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QStatusBar,
@@ -53,7 +54,7 @@ from archward.ui.dialogs.preferences import PreferencesDialog
 from archward.ui.dialogs.snapshot_browser import SnapshotBrowser
 from archward.ui.log_pane import LogPane
 from archward.ui.phase_rail import PhaseRail
-from archward.ui.prompter import GuiPrompter
+from archward.ui.prompter import GuiPrompter, PkgbuildPrompter, UpdatePrompter
 from archward.ui.qt_bus import QtEventBridge
 from archward.ui.views.gates_view import GatesView
 from archward.ui.views.pacnew_view import PacnewView
@@ -99,6 +100,8 @@ class PipelineWorker(QThread):
         *,
         no_aur: bool = False,
         config_path: Path | None = None,
+        prompt_provider=None,
+        pkgbuild_reviewer=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -109,6 +112,8 @@ class PipelineWorker(QThread):
         self.prompter = prompter
         self.no_aur = no_aur
         self.config_path = config_path
+        self.prompt_provider = prompt_provider
+        self.pkgbuild_reviewer = pkgbuild_reviewer
         self.cancel_event = threading.Event()
         self.result: PipelineResult | None = None
 
@@ -123,6 +128,8 @@ class PipelineWorker(QThread):
                 cancel_event=self.cancel_event,
                 prompter=self.prompter,
                 config_path=self.config_path,
+                prompt_provider=self.prompt_provider,
+                pkgbuild_reviewer=self.pkgbuild_reviewer,
             )
         except Exception:  # noqa: BLE001
             log.exception("pipeline raised; emitting None result")
@@ -158,6 +165,12 @@ class MainWindow(QMainWindow):
         # Prompter is built after the views — it needs a RiskView reference
         # for the v0.3.0 inline-decision flow.
         self.prompter: GuiPrompter | None = None
+        # v0.4.0 update prompter: routes pacman/AUR interactive prompts to the
+        # UpdateView's inline input row. Built alongside the regular prompter.
+        self.update_prompter: UpdatePrompter | None = None
+        # v0.4.0 PKGBUILD review prompter: surfaces the PkgbuildReviewDialog
+        # per AUR package when noconfirm=False.
+        self.pkgbuild_prompter: PkgbuildPrompter | None = None
         self.worker: PipelineWorker | None = None
 
         # ── Phase views ────────────────────────────────────────────────────
@@ -170,6 +183,10 @@ class MainWindow(QMainWindow):
             "verify": VerifyView(),
         }
         self.prompter = GuiPrompter(risk_view=self._views["risk"], parent=self)
+        self.update_prompter = UpdatePrompter(
+            update_view=self._views["update"], parent=self
+        )
+        self.pkgbuild_prompter = PkgbuildPrompter(main_window=self)
         self._stack = QStackedWidget()
         for v in self._views.values():
             self._stack.addWidget(v)
@@ -211,6 +228,26 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
+        # Brand cue: shield icon + "Archward <version>" — added as two
+        # direct toolbar widgets, NOT wrapped in a QWidget+QHBoxLayout.
+        # An earlier attempt used a custom container which collapsed to
+        # zero width when the toolbar re-laid-out under heavy paint
+        # pressure (visible as the brand chip vanishing during pacman
+        # -Syu and never coming back). Two plain QLabels added directly
+        # let the toolbar's own layout manage their geometry.
+        from archward import __version__
+        from archward.ui.icon import archward_icon
+        from archward.ui.theme import brand_palette
+        _brand_accent = brand_palette().accent_text_css
+        _icon_lbl = QLabel()
+        _icon_lbl.setPixmap(archward_icon().pixmap(22, 22))
+        _icon_lbl.setContentsMargins(8, 0, 4, 0)
+        toolbar.addWidget(_icon_lbl)
+        _name_lbl = QLabel(f"<b>Archward</b> {__version__}")
+        _name_lbl.setStyleSheet(f"color: {_brand_accent}; padding-right: 8px;")
+        toolbar.addWidget(_name_lbl)
+        toolbar.addSeparator()
+
         self._dry_btn = QPushButton("Run Dry-Run")
         self._dry_btn.clicked.connect(lambda: self._start_run(Mode.DRY_RUN))
         toolbar.addWidget(self._dry_btn)
@@ -238,6 +275,15 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         distro = detect_distro()
         toolbar.addWidget(QLabel(f"  Distro: {distro.pretty_name}  "))
+
+        # Spacer pushes the About button to the far right of the toolbar.
+        _spacer = QWidget()
+        _spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(_spacer)
+        self._about_btn = QPushButton("About")
+        self._about_btn.setToolTip("Version, license, project links.")
+        self._about_btn.clicked.connect(self._open_about)
+        toolbar.addWidget(self._about_btn)
 
         # ── Status bar ─────────────────────────────────────────────────────
         self._status = QStatusBar()
@@ -276,6 +322,8 @@ class MainWindow(QMainWindow):
             mode,
             self.prompter,
             config_path=self.config_path,
+            prompt_provider=self.update_prompter.prompt if self.update_prompter else None,
+            pkgbuild_reviewer=self.pkgbuild_prompter,
             parent=self,
         )
         self.worker.finished_with_result.connect(self._on_pipeline_done)
@@ -442,6 +490,10 @@ class MainWindow(QMainWindow):
         dlg = SnapshotBrowser(self.cfg, self.strategy, self.bus, parent=self)
         dlg.exec()
 
+    def _open_about(self) -> None:
+        from archward.ui.dialogs.about import AboutDialog
+        AboutDialog(parent=self).exec()
+
     def _open_preferences(self) -> None:
         if self.worker is not None and self.worker.isRunning():
             self._status.showMessage("Pipeline running — close it before editing preferences.")
@@ -510,5 +562,8 @@ class MainWindow(QMainWindow):
             # can exit cleanly.
             if self.prompter is not None:
                 self.prompter.cancel_pending_decision()
+            # Same defensive cancel for an in-flight pacman/AUR prompt.
+            if self.update_prompter is not None:
+                self.update_prompter.cancel_pending()
             self.worker.wait(3000)
         super().closeEvent(event)

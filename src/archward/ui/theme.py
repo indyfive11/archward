@@ -147,6 +147,59 @@ _DARK = StatusPalette(
 )
 
 
+@dataclass(frozen=True)
+class BrandPalette:
+    """archward brand colors — sampled from the shield icon SVG.
+
+    The light/dark split keeps contrast usable on both Breeze and Breeze
+    Dark (and equivalents). The accent foreground is the saturated teal
+    on light themes; on dark themes we shift to the lighter cyan that
+    pops against dark surfaces. Tints are CSS rgba so they degrade
+    gracefully when applied via stylesheet to widgets that don't accept
+    QColor directly.
+    """
+
+    accent_fg: QColor       # primary — used for borders, group labels, highlight
+    accent_strong: QColor   # higher contrast — outlines, focused borders
+    accent_bg_tint: str     # CSS rgba — faint background fill
+    accent_border: str      # CSS color — for stylesheet `border` rules
+    accent_text_css: str    # CSS color — for stylesheet `color` rules
+
+
+_BRAND_LIGHT = BrandPalette(
+    accent_fg=QColor("#0e7490"),
+    accent_strong=QColor("#083344"),
+    accent_bg_tint="rgba(14, 116, 144, 0.10)",
+    accent_border="#0e7490",
+    accent_text_css="#0e7490",
+)
+
+_BRAND_DARK = BrandPalette(
+    accent_fg=QColor("#14b8c4"),
+    accent_strong=QColor("#5be4ed"),
+    accent_bg_tint="rgba(20, 184, 196, 0.18)",
+    accent_border="#14b8c4",
+    accent_text_css="#14b8c4",
+)
+
+
+# Brand-tinted success banner (RESULT:SUCCESS) — supersedes the generic
+# green from StatusPalette so a clean run carries the archward colors.
+# Light theme uses a soft teal-on-pale-teal; dark uses bright cyan on a
+# darker teal so it pops against Breeze Dark / Adwaita Dark.
+BRAND_SUCCESS_BG_LIGHT = "#d4eef2"
+BRAND_SUCCESS_FG_LIGHT = "#083344"
+BRAND_SUCCESS_BG_DARK = "#0e3a44"
+BRAND_SUCCESS_FG_DARK = "#5be4ed"
+
+
+def brand_success_colors() -> tuple[str, str]:
+    """Return (bg, fg) CSS strings for the brand-themed success banner."""
+    if is_dark_theme():
+        return BRAND_SUCCESS_BG_DARK, BRAND_SUCCESS_FG_DARK
+    return BRAND_SUCCESS_BG_LIGHT, BRAND_SUCCESS_FG_LIGHT
+
+
 def is_dark_theme() -> bool:
     """True when the active QPalette's Window color is dark.
 
@@ -167,3 +220,13 @@ def is_dark_theme() -> bool:
 def status_palette() -> StatusPalette:
     """Return the StatusPalette appropriate for the active theme."""
     return _DARK if is_dark_theme() else _LIGHT
+
+
+def brand_palette() -> BrandPalette:
+    """Return the BrandPalette appropriate for the active theme.
+
+    Sampled from packaging/archward.svg:
+      - light theme uses the shield's primary teal (#0e7490)
+      - dark theme uses the inner edge cyan (#14b8c4) for better contrast
+    """
+    return _BRAND_DARK if is_dark_theme() else _BRAND_LIGHT

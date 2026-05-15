@@ -115,8 +115,11 @@ HELP: dict[tuple[str, str], str] = {
         "`keep_ours` if you generally trust your customizations over upstream."
     ),
     ("pacnew", "_section_rules"): (
-        "Rules are edited by hand in config.toml. Use the Advanced tab's "
-        "'Open config.toml' to launch your editor."
+        "Each rule matches a `.pacnew` file by glob pattern and prescribes a "
+        "strategy (keep_ours / take_new / review_needed). Rules evaluate "
+        "top-to-bottom; first match wins. Unmatched files use the default "
+        "strategy above. Note is free text — shown in the Pacnew view as the "
+        "reason. Use 'Restore defaults…' to rewind to the shipped 9 rules."
     ),
 
     # ── AUR ────────────────────────────────────────────────────────────────
@@ -201,6 +204,53 @@ HELP: dict[tuple[str, str], str] = {
         "If checked, a non-zero exit from any pre_update hook aborts the "
         "pipeline before pacman runs. Useful for 'verify backup is fresh' "
         "hooks. post_verify hooks never abort regardless of this setting."
+    ),
+
+    # ── Verify remediation hints (v0.4.0) ─────────────────────────────────
+    # Surfaced by the "What to do?" button per FAIL row in VerifyView.
+    # Keyed by the normalized check name (hyphens → underscores). Bucket
+    # name keys handle generic checks (services, plugin) where the
+    # individual check name is unit-/plugin-specific.
+    ("verify_hint", "kernel"): (
+        "The running kernel doesn't match the just-installed kernel — DKMS "
+        "modules built against the old version may misbehave. Reboot to "
+        "load the new kernel; verify with `uname -r` after coming back up."
+    ),
+    ("verify_hint", "pacnew"): (
+        "Pacman left .pacnew files in /etc — package defaults diverged from "
+        "your customizations. Open the Pacnew view (left rail) to resolve "
+        "each one: View Diff to compare, then Keep / Take New / Edit. "
+        "Leaving them unresolved means the updated daemon may use stale config."
+    ),
+    ("verify_hint", "disk"): (
+        "Free disk space on / fell below the configured floor during the "
+        "update. Reclaim space: `sudo paccache -rk2` (drop old cached "
+        "package versions), then re-check with `df -h /`. If still tight, "
+        "raise gates.min_disk_gb in Preferences to match reality."
+    ),
+    ("verify_hint", "pacman_log"): (
+        "pacman's log contains ALPM warnings or errors from this run. "
+        "Inspect with `tail -100 /var/log/pacman.log`. Common causes: a "
+        "file conflict (resolved with --overwrite), a hook script failure, "
+        "or a package returning non-zero from its install scripts."
+    ),
+    ("verify_hint", "reboot_log"): (
+        "A 'reboot recommended' marker is newer than the snapshot. The "
+        "kernel, glibc, or systemd was updated and a session/userspace "
+        "restart won't pick it up cleanly. Reboot at your next convenience."
+    ),
+    ("verify_hint", "service"): (
+        "A systemd unit that was supposed to be active isn't. Diagnose with "
+        "`systemctl status <unit>` for the immediate state and "
+        "`journalctl -xeu <unit>` for the failure trail. If the unit was "
+        "intentionally retired, remove it from Preferences → Services → "
+        "to_verify (or run `archward --detect`)."
+    ),
+    ("verify_hint", "plugin"): (
+        "A third-party verify plugin produced this FAIL. The check's message "
+        "column above is the plugin's own diagnostic. If the plugin itself "
+        "is broken, uninstall it (`pip uninstall <name>`) — archward's "
+        "built-in checks will continue without it."
     ),
 
     # ── Profiles ──────────────────────────────────────────────────────────

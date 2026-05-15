@@ -17,12 +17,27 @@ import logging
 import re
 import subprocess
 import threading
+from typing import Protocol
 
 from archward.aur.helper import AurHelper, discover
 from archward.events import EventBus
 from archward.models.aur import AurResult, BuildFailure
 from archward.models.config import ConfigModel
+from archward.pacman.runner import PromptProvider
 from archward.privilege.sudo import SudoStrategy
+
+
+class PkgbuildReviewer(Protocol):
+    """Callback signature for the PKGBUILD review modal flow.
+
+    Called once per pending AUR package (when noconfirm=False).
+    Returns True to approve building the package; False to skip it.
+    `cancel_all_requested` short-circuits the loop without further calls.
+    """
+
+    def review(self, pkg: str) -> bool: ...
+    def cancel_all_requested(self) -> bool: ...
+    def reset(self) -> None: ...
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +109,8 @@ def run_aur_update(
     ignore: list[str] | None = None,
     cancel_event: threading.Event | None = None,
     force_skip: bool = False,
+    prompt_provider: PromptProvider | None = None,
+    pkgbuild_reviewer: PkgbuildReviewer | None = None,
 ) -> AurResult:
     """Run the AUR phase. `force_skip` is set by `--no-aur` or `aur.skip=true`."""
     bus.emit_start(PHASE, "AUR phase")
@@ -135,8 +152,51 @@ def run_aur_update(
     for pkg, old, new in pending:
         bus.emit_log(PHASE, f"  {pkg:36s} {old} -> {new}")
 
+    # F3 — PKGBUILD review modal. When interactive AUR is requested and a
+    # reviewer callback is wired, ask the user per package; rejected
+    # packages get added to the --ignore list so yay/paru skip them.
+    review_ignored: list[str] = []
+    if not cfg.pacman.noconfirm and pkgbuild_reviewer is not None and pending:
+        pkgbuild_reviewer.reset()
+        bus.emit_log(PHASE, "Reviewing PKGBUILDs (one modal per package)…")
+        for pkg, _old, _new in pending:
+            if pkgbuild_reviewer.cancel_all_requested():
+                bus.emit_log(PHASE, "PKGBUILD review cancelled by user — aborting AUR phase.")
+                bus.emit_result(PHASE, "AUR phase aborted (user cancelled PKGBUILD review)")
+                return AurResult(
+                    exit_code=130,
+                    failures=(),
+                    skipped=True,
+                    skip_reason="user cancelled PKGBUILD review",
+                )
+            approved = pkgbuild_reviewer.review(pkg)
+            if not approved and not pkgbuild_reviewer.cancel_all_requested():
+                review_ignored.append(pkg)
+                bus.emit_log(PHASE, f"  rejected: {pkg} (added to --ignore)")
+        if pkgbuild_reviewer.cancel_all_requested():
+            bus.emit_log(PHASE, "PKGBUILD review cancelled by user — aborting AUR phase.")
+            bus.emit_result(PHASE, "AUR phase aborted (user cancelled PKGBUILD review)")
+            return AurResult(
+                exit_code=130,
+                failures=(),
+                skipped=True,
+                skip_reason="user cancelled PKGBUILD review",
+            )
+        if review_ignored:
+            bus.emit_log(
+                PHASE,
+                f"Skipping {len(review_ignored)} rejected package(s): {', '.join(review_ignored)}",
+            )
+
+    effective_ignore = list(ignore or []) + review_ignored
+
     exit_code, captured = helper.run_update(
-        ignore=ignore or [], strategy=strategy, bus=bus, cancel_event=cancel_event
+        ignore=effective_ignore,
+        strategy=strategy,
+        bus=bus,
+        cancel_event=cancel_event,
+        noconfirm=cfg.pacman.noconfirm,
+        prompt_provider=prompt_provider if not cfg.pacman.noconfirm else None,
     )
 
     failures = scan_build_failures(captured)

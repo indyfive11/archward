@@ -28,7 +28,7 @@ import subprocess
 import threading
 
 from archward.events import EventBus
-from archward.pacman.runner import run_streaming
+from archward.pacman.runner import PromptProvider, run_streaming
 from archward.privilege.sudo import SudoStrategy
 
 log = logging.getLogger(__name__)
@@ -68,16 +68,24 @@ class AurutilsAdapter:
         strategy: SudoStrategy,
         bus: EventBus,
         cancel_event: threading.Event | None,
+        *,
+        noconfirm: bool = True,
+        prompt_provider: PromptProvider | None = None,
     ) -> tuple[int, list[str]]:
         if ignore:
             bus.emit_log(
                 "update_aur",
                 f"aurutils: --ignore is not supported by `aur sync` directly; ignoring {len(ignore)} entries.",
             )
-        # `aur sync -u --noconfirm` builds+syncs to the local repo. Installation
-        # comes via the next pacman -Syu — which pipeline/update_official has
-        # already run. This is best-effort; build failures propagate via exit code.
-        argv = ["aur", "sync", "-u", "--noconfirm"]
+        # `aur sync -u` builds+syncs to the local repo. Installation comes via
+        # the next pacman -Syu — which pipeline/update_official has already
+        # run. This is best-effort; build failures propagate via exit code.
+        # Interactive mode is supported for symmetry with yay/paru — when
+        # noconfirm=False, drop the flag and let prompt_provider handle any
+        # makepkg/pacman prompts that surface.
+        argv = ["aur", "sync", "-u"]
+        if noconfirm:
+            argv.append("--noconfirm")
         return run_streaming(
             argv,
             strategy=strategy,
@@ -85,4 +93,5 @@ class AurutilsAdapter:
             phase="update_aur",
             cancel_event=cancel_event,
             use_sudo=False,
+            prompt_provider=prompt_provider,
         )

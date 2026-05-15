@@ -63,6 +63,7 @@ from archward.pipeline.rollback import (
     restore_all_configs,
     restore_config,
 )
+from archward.pipeline.retention import prune_snapshots
 from archward.pipeline.snapshot import take_snapshot
 from archward.privilege.sudo import SudoStrategy
 from archward.ui.dialogs.diff_dialog import DiffDialog
@@ -243,14 +244,75 @@ class SnapshotBrowser(QDialog):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([300, 800])
 
+        prune_btn = QPushButton("Prune now…")
+        prune_btn.setToolTip(
+            "Delete old snapshots, keeping only the N most recent. "
+            "Defaults to cfg.general.keep_snapshots."
+        )
+        prune_btn.clicked.connect(self._on_prune_clicked)
+
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close.rejected.connect(self.reject)
         close.accepted.connect(self.accept)
 
+        bottom_row = QHBoxLayout()
+        bottom_row.addWidget(prune_btn)
+        bottom_row.addStretch(1)
+        bottom_row.addWidget(close)
+
         layout = QVBoxLayout(self)
         layout.addWidget(splitter, stretch=1)
-        layout.addWidget(close)
+        layout.addLayout(bottom_row)
 
+        self._populate_snapshots()
+
+    # ── Prune action (F6, v0.4.0) ──────────────────────────────────────────
+
+    def _on_prune_clicked(self) -> None:
+        default_keep = self._cfg.general.keep_snapshots if self._cfg.general.keep_snapshots > 0 else 10
+        keep, ok = QInputDialog.getInt(
+            self,
+            "archward — prune snapshots",
+            "Keep how many of the newest snapshots? (older ones will be deleted)",
+            default_keep,
+            0,  # 0 = delete all
+            10_000,
+            1,
+        )
+        if not ok:
+            return
+        # Count what would be removed so the confirm shows a real number.
+        snap_dir = self._cfg.general.snapshot_dir
+        if snap_dir.exists():
+            existing = [
+                p for p in snap_dir.iterdir()
+                if p.is_dir() and (p / ".timestamp").exists()
+            ]
+        else:
+            existing = []
+        would_delete = max(0, len(existing) - keep)
+        if would_delete == 0:
+            QMessageBox.information(
+                self,
+                "archward",
+                f"Nothing to prune — {len(existing)} snapshot(s) present, keeping {keep}.",
+            )
+            return
+        confirm = QMessageBox.question(
+            self,
+            "archward — confirm prune",
+            f"Delete {would_delete} old snapshot(s), keeping the {keep} newest?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        removed = prune_snapshots(self._cfg, keep=keep)
+        QMessageBox.information(
+            self,
+            "archward",
+            f"Pruned {len(removed)} snapshot(s).",
+        )
         self._populate_snapshots()
 
     # ── Snapshot list population ───────────────────────────────────────────

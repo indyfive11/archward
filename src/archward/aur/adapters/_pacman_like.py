@@ -14,7 +14,7 @@ import subprocess
 import threading
 
 from archward.events import EventBus
-from archward.pacman.runner import run_streaming
+from archward.pacman.runner import PromptProvider, run_streaming
 from archward.privilege.sudo import SudoStrategy
 
 log = logging.getLogger(__name__)
@@ -30,9 +30,15 @@ _OUTPUT_FLAGS = ("--noprogressbar", "--color=never")
 
 
 class _PacmanLikeAdapter:
-    """Shared implementation; subclasses set `name`."""
+    """Shared implementation; subclasses set `name` + optionally override
+    `interactive_extra_flags` for helper-specific 'skip the built-in review
+    menus' flags (yay uses three; paru uses one)."""
 
     name: str  # "yay" or "paru"
+    # Flags appended when running interactively (noconfirm=False). F3's
+    # PKGBUILD modal does its own review, so we suppress the helper's
+    # built-in $EDITOR-based menus. Override per helper.
+    interactive_extra_flags: tuple[str, ...] = ()
 
     @classmethod
     def is_available(cls) -> bool:
@@ -67,8 +73,17 @@ class _PacmanLikeAdapter:
         strategy: SudoStrategy,
         bus: EventBus,
         cancel_event: threading.Event | None,
+        *,
+        noconfirm: bool = True,
+        prompt_provider: PromptProvider | None = None,
     ) -> tuple[int, list[str]]:
-        argv = [self.name, "-Sua", "--noconfirm", *_OUTPUT_FLAGS]
+        argv = [self.name, "-Sua", *_OUTPUT_FLAGS]
+        if noconfirm:
+            argv.append("--noconfirm")
+        elif self.interactive_extra_flags:
+            # F3's modal handles PKGBUILD review; suppress the helper's own
+            # $EDITOR-based menus. Flag set is helper-specific.
+            argv.extend(self.interactive_extra_flags)
         for pkg in ignore:
             argv.extend(["--ignore", pkg])
         # use_sudo=False: helpers MUST run as user. Sudo prompts inside the
@@ -80,4 +95,5 @@ class _PacmanLikeAdapter:
             phase="update_aur",
             cancel_event=cancel_event,
             use_sudo=False,
+            prompt_provider=prompt_provider,
         )

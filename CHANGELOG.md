@@ -6,6 +6,171 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-15
+
+**Theme: keep users in archward.** Six features close the GUI's biggest
+"escape paths" — places where the existing workflow forced users to drop
+to a terminal or hand-edit `config.toml` (and in doing so sidestep
+archward's snapshot/gate/verify safety net).
+
+### Added
+
+- **F1 — GUI-editable pacnew rules.** The Preferences → Pacnew tab is no
+  longer read-only; rules can be added, edited, reordered, and removed
+  via an editable table. Strategy is a per-row combo
+  (`keep_ours` / `take_new` / `review_needed`). A "Restore defaults…"
+  button rewinds to the 9 shipped rules after confirmation. Mirrors the
+  Services tab pattern.
+
+- **F2 — In-GUI pacman/AUR interactive prompts.** When
+  `pacman.noconfirm=False`, archward routes pacman + AUR helpers
+  through a PTY so their `[Y/n]` / provider-selection prompts surface
+  inside the GUI instead of hanging the run. A new inline input row at
+  the bottom of the Update view lights up on each detected prompt
+  (pre-filled with the sensible default — `Y` for yes/no, `1` for
+  numeric), accepts the user's answer, and writes it back to the
+  subprocess stdin. Cancel mid-prompt routes a SIGINT to the subprocess
+  group; pacman handles it cleanly between transactions.
+  - New `archward.pacman.prompts` module: `PROMPT_PATTERNS` regex
+    table + `PromptKind` enum (`YES_NO` / `NUMERIC` / `FREE`).
+  - `pacman.runner.run_streaming()` gains a `prompt_provider` kwarg.
+    When `None` (default), the legacy pipe-based code path runs
+    unchanged — zero regression risk for `noconfirm=True` users.
+  - `aur/adapters/_pacman_like.py` drops the hardcoded `--noconfirm`;
+    when interactive, also passes `--editmenu=false --diffmenu=false
+    --cleanmenu=false` so yay/paru don't spawn `$EDITOR` (F3 handles
+    PKGBUILD review properly).
+  - New `UpdatePrompter` (cross-thread bridge in
+    `archward.ui.prompter`) mirrors the proven `GuiPrompter` pattern.
+
+- **F3 — PKGBUILD review modal with per-package skip.** Now that yay /
+  paru can run without `--noconfirm`, the AUR phase pre-fetches each
+  pending PKGBUILD via `git clone --depth=1` of the AUR git repo and
+  shows it in a modal — Approve / Reject / Cancel-review. Rejected
+  packages are added to the helper's `--ignore` list so the remaining
+  approved ones still build. Fetch failures surface Skip / Retry /
+  Cancel-review buttons. KISS: plain-text PKGBUILD viewer, no syntax
+  highlighting, no diff against previous version.
+  - New `archward.aur.prefetch.fetch_pkgbuild()`.
+  - New `archward.ui.dialogs.pkgbuild_review.PkgbuildReviewDialog`.
+  - New `PkgbuildPrompter` (worker-thread → main-thread modal bridge).
+  - `pipeline/update_aur.py` defines a `PkgbuildReviewer` Protocol and
+    drives the loop between `list_pending` and `helper.run_update`.
+
+- **F4 — Hook templates.** Each editor on the Preferences → Hooks tab
+  gets an "Insert template…" combobox above it. Selection appends the
+  template body (with a `# template: <name>` header line) to whatever
+  the user has typed — append-on-select, never replace. Ships with 4
+  prebaked snippets: btrfs `@home` snapshot, "refuse update if
+  `/mnt/backup` is stale," Discord webhook on completion, restart
+  user-level systemd services after kernel update.
+  - New `archward.ui.dialogs.hook_templates` module with the
+    `HOOK_TEMPLATES` dict.
+
+- **F5 — Verify failure remediation hints.** The Verify view gains a
+  4th column `Action`. FAIL rows with a registered hint show a
+  "What to do?" button; click → `QMessageBox.information` with
+  context-specific guidance (e.g. kernel mismatch → reboot, service
+  inactive → `systemctl status / journalctl -xeu`). PASS / WARN rows
+  and FAIL rows with no registered hint get nothing — no empty popups.
+  Hints live in `help_text.HELP` under a new `verify_hint` section,
+  keyed by check name (universal checks: `kernel`, `pacnew`, `disk`,
+  `pacman_log`, `reboot_log`) or bucket (`service`, `plugin`).
+
+- **F6 — Snapshot retention.** Two changes wire up the
+  `keep_snapshots` setting that has been GUI-exposed but no-op since
+  v0.1.0:
+  - **Auto-prune at end of pipeline.** `run_pipeline()` now calls
+    `prune_snapshots(cfg)` after the report phase. Keeps the N newest
+    snapshots by mtime; deletes the rest. `keep_snapshots <= 0`
+    disables.
+  - **"Prune now…" button** in the snapshot browser. `QInputDialog`
+    asks for the keep-count (defaults to the configured value); confirm
+    dialog summarizes "delete N old snapshots, keep M newest"; refresh
+    after.
+  - New `archward.pipeline.retention` module with the standalone
+    helper.
+
+### Branding
+
+The shield+A icon (teal `#0e7490`) is now the basis for the application's
+visual identity. Centralized in `archward.ui.theme.BrandPalette` (light +
+dark variants). Touches:
+
+- **Window icon wired at runtime.** `app.setWindowIcon()` + Wayland
+  `app.setDesktopFileName("archward")` + `StartupWMClass=archward` in
+  the `.desktop` file. Plasma now associates the running window with the
+  launcher so the taskbar uses our icon, not a default. SVG bundled at
+  `src/archward/data/archward.svg` for `pip install`-only setups.
+- **Toolbar brand cue.** Shield icon + "Archward <version>" label
+  added directly to the toolbar (two plain QLabel widgets — earlier
+  attempts wrapped them in a custom QHBoxLayout container which
+  collapsed under heavy paint traffic during pacman -Syu).
+- **About dialog.** New `Help → About` modal showing the icon at 96px,
+  version, license, GitHub / AUR links.
+- **Phase rail colors.** Running rows bolded + brand teal foreground.
+  Passed (done) rows get the brand teal glyph. Warn / fail / skipped
+  keep their semantic colors. Pending rows stay default. Palettes are
+  cached at construction time — `set_status()` fires many times during
+  an update phase, and per-call palette lookups starved the paint queue
+  in an earlier draft (visible as widgets going black during pacman -Syu).
+- **Result banner success.** RESULT:SUCCESS uses brand-themed teal
+  instead of generic green. Failures stay red, info states stay amber.
+- **Verify view bucket headers** ("universal", "services", "plugin",
+  "hooks") render in brand teal bold.
+- **Preferences section help.** Every `_section_help()` banner gets a
+  3px teal left border, tying tabs into the brand.
+- **Inline prompt + Send button** (F2) themed in brand teal — text
+  color only. Earlier work added a `:default` pseudo + `setDefault(True)`
+  on the hidden Send button, which corrupted the parent window's
+  default-button chain and prevented sibling buttons (Preferences,
+  About) from repainting until a hover event triggered a style poll.
+- **PKGBUILD review modal header** (F3) gets a faint teal background
+  with a brand teal left border.
+- **`_open_in_editor()` priority fix** (Profiles tab bug) — now
+  `$VISUAL` → `xdg-open` → `$EDITOR`. Previously a `$EDITOR=nvim`
+  user clicking "Open in editor" got nothing (terminal editor spawned
+  without a TTY → silent fail).
+
+### Changed
+
+- `_PacnewTab` rewritten — no longer extends `QTreeWidget` read-only;
+  uses `QTableWidget(0,3)` with per-row strategy combobox. `dump()`
+  rebuilds the `PacnewConfig.rules` tuple from cell contents (blank
+  pattern rows dropped silently to match `_ServicesTab` behavior).
+- Help text key `("pacnew", "_section_rules")` rewritten — no longer
+  says "edit by hand in config.toml."
+- `_HooksTab` layout adds a horizontal row above each editor for the
+  template combobox.
+- `pipeline/update_aur.run_aur_update()` gains `pkgbuild_reviewer` +
+  `prompt_provider` kwargs.
+- `pipeline/update_official.run_official_update()` gains
+  `prompt_provider` kwarg.
+- `aur.helper.AurHelper.run_update()` Protocol signature extended with
+  `noconfirm` + `prompt_provider` kwargs (default-preserving).
+- All AUR adapters (`yay`, `paru`, `aurutils`) honor the new kwargs.
+
+### Tests
+
+224 → **287**. New files:
+- `test_preferences_pacnew_tab.py` — F1 round-trip + add/remove/restore.
+- `test_prompt_detection.py` — every regex matches its fixture line.
+- `test_pacman_runner_pty.py` — PTY-backed Linux-only smoke against
+  a `bash -c 'read -p ...'` fixture (yes-no, no-prompt, SIGINT cancel,
+  pipe-path backward compatibility).
+- `test_aur_adapter_yay.py` — extended with argv-shape assertions for
+  the new `noconfirm`/`prompt_provider` kwargs and `--ignore` plumbing.
+- `test_prefetch.py` — mocked `git clone` for success / clone-failure /
+  timeout / missing-binary / missing-PKGBUILD branches.
+- `test_pkgbuild_review_dialog.py` — modal result enum per button.
+- `test_verify_hints.py` — column 3 button presence per status, hint
+  key normalization (services/plugin bucket override), every shipped
+  hint resolves to non-empty text.
+- `test_hook_templates.py` — dict shape, kind validity, formatted
+  insertion (header comment + trailing separator).
+- `test_retention.py` — newest-N kept, keep≤0 disabled, explicit
+  override, missing dir graceful, dirs without `.timestamp` ignored.
+
 ## [0.3.5] — 2026-05-14
 
 ### Added

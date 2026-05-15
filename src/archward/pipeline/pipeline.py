@@ -23,8 +23,11 @@ from archward.models.hook import HookResult
 from archward.models.update import PendingUpdate, RiskLevel
 from archward.models.verify import VerifyResult
 from archward.pacman import query as pq
+from archward.pacman.runner import PromptProvider
+from archward.pipeline.update_aur import PkgbuildReviewer
 from archward.pipeline import gates as gates_phase
 from archward.pipeline import pacnew_phase
+from archward.pipeline import retention
 from archward.pipeline import risk as risk_phase
 from archward.pipeline import snapshot as snapshot_phase
 from archward.pipeline import update_aur
@@ -111,6 +114,8 @@ def run_pipeline(
     cancel_event: threading.Event | None = None,
     prompter: Prompter | None = None,
     config_path: Path | None = None,
+    prompt_provider: PromptProvider | None = None,
+    pkgbuild_reviewer: PkgbuildReviewer | None = None,
 ) -> PipelineResult:
     """Run the full pipeline. Never raises on update failure — see PipelineResult."""
     result = PipelineResult()
@@ -265,6 +270,7 @@ def run_pipeline(
             cfg, strategy, bus,
             ignore=list(result.deselected_packages),
             cancel_event=cancel_event,
+            prompt_provider=prompt_provider,
         )
         result.update_exit_code = update_code
         if update_code != 0:
@@ -279,7 +285,11 @@ def run_pipeline(
 
     # ── Update AUR ──────────────────────────────────────────────────────────
     result.aur = update_aur.run_aur_update(
-        cfg, strategy, bus, cancel_event=cancel_event, force_skip=no_aur
+        cfg, strategy, bus,
+        cancel_event=cancel_event,
+        force_skip=no_aur,
+        prompt_provider=prompt_provider,
+        pkgbuild_reviewer=pkgbuild_reviewer,
     )
 
     # ── Pacnew scan ─────────────────────────────────────────────────────────
@@ -303,4 +313,18 @@ def run_pipeline(
         verify=result.verify,
         pacnew_count=result.pacnew_count,
     )
+
+    # ── Snapshot retention ──────────────────────────────────────────────────
+    # Honor cfg.general.keep_snapshots — wired in v0.4.0 (F6). Failures here
+    # are non-fatal: the run is otherwise complete.
+    try:
+        removed = retention.prune_snapshots(cfg)
+        if removed:
+            bus.emit_log(
+                "pipeline",
+                f"Pruned {len(removed)} old snapshot(s); kept newest {cfg.general.keep_snapshots}.",
+            )
+    except Exception:  # noqa: BLE001
+        log.exception("snapshot retention pass failed; non-fatal")
+
     return result
