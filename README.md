@@ -1,13 +1,27 @@
-# archward
+<p align="center">
+  <img src="docs/banner.svg" alt="Archward — Don't be Awkward. Be Archward." width="100%">
+</p>
+
+# Archward — *Don't be Awkward. Be Archward.*
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![AUR](https://img.shields.io/aur/version/archward?label=AUR)](https://aur.archlinux.org/packages/archward)
 
-A safe-update tool for Arch-based Linux distributions (Arch, EndeavourOS,
-Manjaro, CachyOS, Garuda, Artix — and anything with `arch` in `ID_LIKE`).
+Every Arch user knows the feeling. You hit `pacman -Syu`, walk away,
+and come back to find a kernel mismatch waiting for a reboot, a service
+that won't start, three `.pacnew` files you didn't know existed, and an
+AUR build that failed somewhere in the middle. The recovery dance from
+that state is *awkward*.
 
-archward wraps `pacman -Syu` with the workflow you actually want around
-system updates. Ships as both a CLI tool (`archward`) and a PySide6 GUI
-(`archward-gui`).
+**Archward** is the opposite. It snapshots your packages, configs, and
+services before pacman runs; gates the update on disk + freshness
+checks; classifies pending packages by risk; surfaces pacman prompts
+and `.pacnew` files inside the GUI; verifies the result; and lets you
+roll back per-file or per-package if anything looks wrong.
+
+Works on Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix — anything
+with `arch` in `ID_LIKE`. Ships as both a CLI tool (`archward`) and a
+PySide6 GUI (`archward-gui`).
 
 ## Pipeline
 

@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Archward — Don't be Awkward. Be Archward.">
+  <title>Archward</title>
+  <desc>Safe-update GUI for Arch-based Linux distributions. Don't be Awkward. Be Archward.</desc>
+
+  <defs>
+    <!-- Dark teal gradient, slate-900 in the top-left to brand teal at the
+         bottom-right. Sampled from the shield icon's outline + body colors. -->
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#062836"/>
+      <stop offset="55%" stop-color="#083344"/>
+      <stop offset="100%" stop-color="#0e7490"/>
+    </linearGradient>
+    <!-- Subtle radial wash centered behind the shield, lifts it off the bg. -->
+    <radialGradient id="shieldGlow" cx="0.18" cy="0.5" r="0.35">
+      <stop offset="0%" stop-color="#14b8c4" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#14b8c4" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="320" fill="url(#bg)"/>
+  <rect width="1200" height="320" fill="url(#shieldGlow)"/>
+
+  <!-- Shield (left) — copied from the canonical 256×256 icon and scaled
+       to ~240px (scale 0.9375) at x=60, y=40 → occupies x=60..300, y=40..280 -->
+  <g transform="translate(60, 40) scale(0.9375)">
+    <!-- Soft drop shadow: offset dark copy of the shield body -->
+    <path d="M 128 28 L 40 56 L 40 132 C 40 188 76 224 128 240 C 180 224 216 188 216 132 L 216 56 Z"
+          transform="translate(0, 8)"
+          fill="#000000" opacity="0.22"/>
+    <!-- Shield body -->
+    <path d="M 128 28 L 40 56 L 40 132 C 40 188 76 224 128 240 C 180 224 216 188 216 132 L 216 56 Z"
+          fill="#0e7490"
+          stroke="#083344"
+          stroke-width="6"
+          stroke-linejoin="round"/>
+    <!-- Inner edge -->
+    <path d="M 128 44 L 54 68 L 54 130 C 54 178 84 208 128 222 C 172 208 202 178 202 130 L 202 68 Z"
+          fill="none"
+          stroke="#14b8c4"
+          stroke-width="2.5"
+          opacity="0.7"/>
+    <!-- Tetrahedron outer -->
+    <path d="M 128 86 L 86 174 L 170 174 Z"
+          fill="#ffffff"
+          stroke="#ffffff"
+          stroke-width="2"
+          stroke-linejoin="round"/>
+    <!-- Tetrahedron inner (negative-space cutout) -->
+    <path d="M 128 122 L 110 162 L 146 162 Z"
+          fill="#0e7490"
+          stroke="none"/>
+  </g>
+
+  <!-- Wordmark + tagline (right of shield).
+       Font stack: GitHub's recommended UI font cascade. -->
+  <g font-family="'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Liberation Sans', sans-serif">
+    <!-- Archward wordmark — large, bold, white -->
+    <text x="340" y="178"
+          font-size="112"
+          font-weight="800"
+          fill="#ffffff"
+          letter-spacing="-2">Archward</text>
+
+    <!-- Thin teal underline accent below wordmark -->
+    <line x1="342" y1="204" x2="980" y2="204"
+          stroke="#14b8c4" stroke-width="2" opacity="0.55"/>
+
+    <!-- Tagline — italic, lighter cyan-white -->
+    <text x="340" y="246"
+          font-size="28"
+          font-weight="400"
+          font-style="italic"
+          fill="#cffafe"
+          letter-spacing="0.5">Don't be Awkward. Be Archward.</text>
+  </g>
+</svg>
