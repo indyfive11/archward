@@ -92,8 +92,12 @@ archward [flags]
   --auto            Hands-off: abort if HIGH RISK packages are present.
   --yes             Auto-confirm all prompts (HIGH-risk + gate overrides).
   --no-aur          Skip the AUR phase regardless of config.
+  --profile NAME    Use ~/.config/archward/profiles/<NAME>.toml instead of the
+                    default config. Bootstraps the file with defaults on first
+                    use. NAME must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}.
   --detect          Run distro / kernel / AUR-helper / service detection and
-                    propose a diff against ~/.config/archward/config.toml.
+                    propose a diff against ~/.config/archward/config.toml
+                    (or the --profile file if given).
   --write-config    Overwrite the config file with archward defaults and exit.
   --version         Print version and exit.
 ```
@@ -144,6 +148,46 @@ The GUI's **Preferences** dialog edits this file with Pydantic validation;
 hand-edits work too. Run `archward --detect` whenever your kernel set, AUR
 helper, or enabled services change — it proposes a diff and asks before
 applying.
+
+## Profiles
+
+Use `--profile NAME` to point archward at
+`~/.config/archward/profiles/<NAME>.toml` instead of the default
+`config.toml`. Useful when one machine wears multiple hats (lab vs.
+daily-driver, baremetal vs. VM, lenient vs. enforcing hooks) and you
+don't want to shuffle config files in and out of place. Both the CLI
+and the GUI honor the flag.
+
+```bash
+# CLI — run an update against a stricter "ci" profile (e.g.
+# fail_pipeline_on_error=true, tighter gates). First run bootstraps
+# the file with defaults.
+archward --profile ci
+
+# CLI — auto-detect kernels/services against a specific profile.
+archward --profile lab --detect
+
+# CLI — reset a profile to defaults.
+archward --profile lab --write-config
+
+# GUI — same flag. The active profile name appears in the window
+# title and status bar; Preferences edits write back to the profile
+# file, not the default config.
+archward-gui --profile lab
+```
+
+`NAME` must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` — no leading dot, no
+path separators, no shell-meaningful characters. The default
+`config.toml` is unchanged when a profile is in use.
+
+The GUI's **Preferences → Profiles** tab also manages profiles in-place:
+list / switch / new from defaults / save current as new / rename /
+delete / open in editor. Switching reloads the running window against
+the selected profile (no restart). The default config appears as a
+switchable pseudo-profile at the top of the list (rename and delete are
+disabled for it). If you switch with unsaved edits, you'll be prompted
+to Save (writes to the *current* profile), Discard, or Cancel.
+Switching is refused while a pipeline is running.
 
 ## User-defined hooks
 
@@ -212,11 +256,13 @@ The single-window GUI mirrors the CLI pipeline:
   one atomic transaction; boot-critical packages require Type-YES
   confirmation. A pre-rollback snapshot is taken automatically so
   rollback-of-rollback works.
-- **Preferences…** toolbar button — 11-tab dialog over the TOML schema
+- **Preferences…** toolbar button — 12-tab dialog over the TOML schema
   (General · Gates · Risk · Services · Pacnew · AUR · Pacman · Verify ·
-  Privilege · Hooks · Advanced) with inline help text per field. Advanced
-  tab has Re-detect (propose diff), Reset to defaults, Open config in
-  `$EDITOR`.
+  Privilege · Hooks · Profiles · Advanced) with inline help text per
+  field. The **Profiles** tab lists every profile (plus the default
+  config), switches the running window in-place, and supports
+  new/rename/delete/open-in-editor. The **Advanced** tab has Re-detect
+  (propose diff), Reset to defaults, Open config in `$EDITOR`.
 
 HIGH-risk approval happens **inline** in the Risk view: per-package
 checkboxes default checked, Proceed/Cancel buttons enable when the

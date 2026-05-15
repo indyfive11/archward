@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
@@ -127,13 +128,19 @@ class PipelineWorker(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, config_path: Path | None = None) -> None:
         super().__init__()
-        self.setWindowTitle("Archward")
+        # Window title reflects the active profile so the user can tell at a
+        # glance which config a launched window edits.
+        self.config_path = config_path
+        if config_path is not None:
+            self.setWindowTitle(f"Archward — profile: {config_path.stem}")
+        else:
+            self.setWindowTitle("Archward")
         self.resize(1200, 800)
 
         # ── State ──────────────────────────────────────────────────────────
-        self.cfg = build_config()
+        self.cfg = build_config(config_path)
         setup_logging(self.cfg.general.log_dir)
         self.bus: EventBus | None = None
         self.bridge: QtEventBridge | None = None
@@ -225,7 +232,10 @@ class MainWindow(QMainWindow):
         # ── Status bar ─────────────────────────────────────────────────────
         self._status = QStatusBar()
         self.setStatusBar(self._status)
-        self._status.showMessage("Ready.")
+        if config_path is not None:
+            self._status.showMessage(f"Ready. (profile: {config_path.stem} — {config_path})")
+        else:
+            self._status.showMessage("Ready.")
 
         # Track snapshot step progress (parsed from log lines "[N/6] ...").
         self._snapshot_step = 0
@@ -425,8 +435,13 @@ class MainWindow(QMainWindow):
         if self.worker is not None and self.worker.isRunning():
             self._status.showMessage("Pipeline running — close it before editing preferences.")
             return
-        dlg = PreferencesDialog(self.cfg, parent=self)
+        dlg = PreferencesDialog(self.cfg, config_path=self.config_path, parent=self)
         dlg.config_saved.connect(self._on_config_saved)
+        # Profile-switch handler needs the dialog reference so it can call
+        # apply_profile_switch() back after rebuilding cfg.
+        dlg.profile_switch_requested.connect(
+            lambda new_path: self._on_profile_switch_requested(new_path, dialog=dlg)
+        )
         dlg.exec()
 
     def _on_config_saved(self, new_cfg: ConfigModel) -> None:
@@ -434,10 +449,41 @@ class MainWindow(QMainWindow):
         self.cfg = new_cfg
         # Privilege/askpass may have changed → rebuild the sudo strategy.
         self.strategy = build_sudo_strategy(self.cfg)
-        # Ensure new snapshot/log dirs exist.
+        # Ensure new snapshot/log dirs exist before re-routing logs to them.
         self.cfg.general.snapshot_dir.mkdir(parents=True, exist_ok=True)
         self.cfg.general.log_dir.mkdir(parents=True, exist_ok=True)
+        # Re-route logging if log_dir changed (otherwise the old
+        # RotatingFileHandler would keep writing to the previous path).
+        # setup_logging() is idempotent — it clears handlers before installing.
+        setup_logging(self.cfg.general.log_dir)
         self._status.showMessage("Preferences saved.")
+
+    def _on_profile_switch_requested(self, new_path, *, dialog) -> None:
+        """Switch the running window to a different profile (or default).
+
+        new_path: Path | None. None == default ~/.config/archward/config.toml.
+        Refused while a pipeline is running (Profile tab disables the button
+        in that case too; this is defense in depth).
+        """
+        if self.worker is not None and self.worker.isRunning():
+            self._status.showMessage("Pipeline running — cannot switch profile.")
+            return
+        self.config_path = new_path
+        self.cfg = build_config(new_path)
+        self.strategy = build_sudo_strategy(self.cfg)
+        setup_logging(self.cfg.general.log_dir)
+        if new_path is not None:
+            self.setWindowTitle(f"Archward — profile: {new_path.stem}")
+            self._status.showMessage(
+                f"Switched to profile: {new_path.stem} — {new_path}"
+            )
+        else:
+            self.setWindowTitle("Archward")
+            self._status.showMessage("Switched to default config.")
+        log.info("profile switched to %s", new_path if new_path else "(default)")
+        # Refresh the still-open Preferences dialog so its widgets reflect
+        # the newly-active profile without the user having to close + reopen.
+        dialog.apply_profile_switch(self.cfg, new_path)
 
     # ── Window lifecycle ───────────────────────────────────────────────────
 

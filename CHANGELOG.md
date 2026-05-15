@@ -6,6 +6,77 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-05-14
+
+### Added
+
+- **Profiles (`--profile NAME`)** — run archward against a named config file
+  at `~/.config/archward/profiles/<NAME>.toml` instead of the default
+  `config.toml`. Useful for per-machine, per-role, or per-experiment
+  configs without juggling files. Supported by both the CLI and the
+  GUI. Fills in the v2 seam reserved since v0.1.0 (PLAN.md §11).
+
+  - First run with `--profile foo` bootstraps
+    `~/.config/archward/profiles/foo.toml` with defaults (same behavior
+    as the default config), so creating a new profile is a one-liner.
+  - **CLI:** the flag threads through every config-touching entry point:
+    `archward --profile foo` (run), `archward --profile foo --detect`
+    (auto-detect against the profile), `archward --profile foo
+    --write-config` (overwrite a profile with defaults).
+  - **GUI:** `archward-gui --profile foo` launches the window against
+    the profile. The active profile name is shown in the window title
+    (`Archward — profile: foo`) and status bar; the Preferences dialog
+    title shows it too, its Advanced-tab "Active config file" label
+    points at the profile path, and Save writes back to the profile
+    file (not the default config). Snapshot/log dirs follow the
+    profile's `[general]` overrides.
+  - **GUI Profiles tab (new in Preferences):** in-place profile
+    management without leaving the window. Lists every profile plus
+    the default `config.toml` (as a switchable pseudo-profile, not
+    renameable or deletable). Buttons: **Switch** (reloads the window
+    against the selected profile; refused while a pipeline runs),
+    **Open in editor**, **New from defaults…**, **Save current as
+    new…**, **Rename…**, **Delete…**. Switching with unsaved edits
+    prompts Save / Discard / Cancel; Save writes to the *current*
+    profile before switching, so edits aren't lost or accidentally
+    carried into the target. Renaming the active profile auto-saves
+    any dirty draft to the new path so the post-rename reload
+    preserves the user's work.
+  - Profile names are validated against
+    `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` so a malicious or typo'd argument
+    cannot escape the profile directory (no leading dot, no path
+    separators, no shell-meaningful characters). Invalid names exit
+    with code 2 and a clear message — same validation in both
+    front-ends, sharing `_resolve_config_path()` in `cli.py`.
+  - New helpers in `archward.config.paths`: `profile_dir()`,
+    `valid_profile_name()`, `profile_config_path()`.
+
+### Changed
+
+- `app.build_config()` / `app.setup_app()` now accept an optional
+  `config_path: Path | None` argument so callers can override the
+  default `~/.config/archward/config.toml` location. The CLI and GUI
+  both use this to plumb `--profile` through; existing callers passing
+  no argument retain the v0.3.1 behavior.
+- `MainWindow.__init__()` and `PreferencesDialog.__init__()` /
+  `_AdvancedTab.__init__()` now accept `config_path: Path | None`. The
+  `archward-gui` entry point gains a minimal argparse (just `--profile`
+  and `--version`) — other CLI flags remain CLI-only because their
+  GUI equivalents are toolbar actions, not invocation knobs.
+- `MainWindow._on_config_saved()` now calls `setup_logging()` on the
+  freshly-saved `log_dir`. Previously, changing `[general].log_dir` via
+  Preferences silently left the old `RotatingFileHandler` attached so
+  the file handler kept writing to the previous path. Pre-existing
+  latent bug; surfaced and fixed alongside the Profiles tab work
+  because the new in-place switcher exercises the same reload path
+  more often.
+
+### Added (helpers)
+
+- `archward.config.paths.iter_profiles()` — alpha-sorted list of valid
+  profile stems under `~/.config/archward/profiles/`. Filenames with
+  invalid stems are silently ignored (defense in depth).
+
 ## [0.3.1] — 2026-05-14
 
 ### Added
@@ -388,7 +459,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/indyfive11/archward/releases/tag/v0.3.2
 [0.3.1]: https://github.com/indyfive11/archward/releases/tag/v0.3.1
 [0.3.0]: https://github.com/indyfive11/archward/releases/tag/v0.3.0
 [0.2.2]: https://github.com/indyfive11/archward/releases/tag/v0.2.2

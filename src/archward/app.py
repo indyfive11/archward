@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 from archward.config import paths
@@ -37,13 +38,17 @@ def build_event_bus(*, console: bool = True) -> EventBus:
     return bus
 
 
-def build_config() -> ConfigModel:
-    """Load ~/.config/archward/config.toml, writing defaults on first run.
+def build_config(config_path: Path | None = None) -> ConfigModel:
+    """Load the archward config, writing defaults on first run.
+
+    If `config_path` is None, the default ~/.config/archward/config.toml is
+    used; otherwise the given path is loaded (e.g. a `--profile NAME` path
+    under ~/.config/archward/profiles/).
 
     Per-section validation errors fall back to that section's defaults; the
     broken file is left untouched for the user to inspect.
     """
-    cfg = load_config()
+    cfg = load_config(config_path)
     # Ensure snapshot/log dirs exist before any phase uses them.
     cfg.general.snapshot_dir.mkdir(parents=True, exist_ok=True)
     cfg.general.log_dir.mkdir(parents=True, exist_ok=True)
@@ -107,14 +112,20 @@ def acquire_lock() -> Iterator[None]:
             pass
 
 
-def setup_app(*, warmup_sudo: bool = True) -> tuple[ConfigModel, SudoStrategy, EventBus]:
+def setup_app(
+    *,
+    warmup_sudo: bool = True,
+    config_path: Path | None = None,
+) -> tuple[ConfigModel, SudoStrategy, EventBus]:
     """Build the standard three-piece app context: config, sudo strategy, event bus.
 
     If `warmup_sudo` is True, calls strategy.warmup() so the sudo timestamp is hot
     before any phase tries to use it — this consolidates the askpass prompt into a
     single early dialog instead of one per privileged command.
+
+    `config_path` overrides the default config location (used by `--profile`).
     """
-    cfg = build_config()
+    cfg = build_config(config_path)
     setup_logging(cfg.general.log_dir)
     bus = build_event_bus()
     strategy = build_sudo_strategy(cfg)

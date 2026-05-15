@@ -33,8 +33,11 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -49,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 from pydantic import ValidationError
 
+from archward.config import paths as config_paths
 from archward.config.defaults import default_config
 from archward.config.detect import apply_detection, diff_against, run_full_detection
 from archward.config.loader import default_config_path, merge_partial, write_config
@@ -79,6 +83,27 @@ def _lines_to_tuple(text: str) -> tuple[str, ...]:
 
 def _tuple_to_lines(items) -> str:
     return "\n".join(items)
+
+
+def _open_in_editor(parent: QWidget, path: Path) -> None:
+    """Open `path` in $VISUAL / $EDITOR, falling back to xdg-open.
+
+    Shared by the Advanced and Profiles tabs so the open-in-editor
+    affordance behaves identically regardless of which file the user
+    points it at.
+    """
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if editor:
+        subprocess.Popen([editor, str(path)])
+        return
+    try:
+        subprocess.Popen(["xdg-open", str(path)])
+    except FileNotFoundError:
+        QMessageBox.warning(
+            parent,
+            "No editor",
+            "Set $EDITOR or install xdg-utils to open the config file from here.",
+        )
 
 
 # ── Tab base ─────────────────────────────────────────────────────────────
@@ -533,8 +558,12 @@ class _AdvancedTab(QWidget):
     redetect_requested = Signal()
     reset_requested = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, config_path: Path | None = None) -> None:
         super().__init__()
+        # When a profile is active, all "active config" affordances must point
+        # at that profile's file, not the default config.toml.
+        self._active_path = config_path if config_path is not None else default_config_path()
+
         redetect_btn = QPushButton("Re-detect…")
         redetect_btn.setToolTip(
             "Re-run distro/kernel/AUR/service detection and propose changes."
@@ -545,36 +574,348 @@ class _AdvancedTab(QWidget):
         reset_btn.setToolTip("Replace all settings with archward defaults.")
         reset_btn.clicked.connect(self.reset_requested.emit)
 
-        open_cfg_btn = QPushButton("Open config.toml in editor")
+        open_cfg_btn = QPushButton("Open config file in editor")
         open_cfg_btn.setToolTip(
             "Opens the active config file in $EDITOR or the desktop default."
         )
         open_cfg_btn.clicked.connect(self._open_config)
 
-        path_label = _help_label(f"Active config file: {default_config_path()}")
+        self._path_label = _help_label(f"Active config file: {self._active_path}")
 
         layout = QVBoxLayout(self)
         layout.addWidget(redetect_btn)
         layout.addWidget(reset_btn)
         layout.addWidget(open_cfg_btn)
         layout.addStretch(1)
-        layout.addWidget(path_label)
+        layout.addWidget(self._path_label)
+
+    def set_active_path(self, path: Path) -> None:
+        """Update which file the open-in-editor / path-label point at."""
+        self._active_path = path
+        self._path_label.setText(f"Active config file: {path}")
 
     def _open_config(self) -> None:
-        path = default_config_path()
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
-        if editor:
-            subprocess.Popen([editor, str(path)])
-            return
-        # Fall back to xdg-open for the desktop's default text editor.
-        try:
-            subprocess.Popen(["xdg-open", str(path)])
-        except FileNotFoundError:
-            QMessageBox.warning(
-                self,
-                "No editor",
-                "Set $EDITOR or install xdg-utils to open the config file from here.",
+        _open_in_editor(self, self._active_path)
+
+
+# ── Profiles tab ─────────────────────────────────────────────────────────
+
+
+# Sentinel data on the (default) row's QListWidgetItem — distinguishes the
+# default config.toml from named profiles without comparing paths.
+_DEFAULT_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+class _ProfilesTab(QWidget):
+    """Profile switcher + manager.
+
+    Not a `_Tab` — has no load()/dump(). Signals up to PreferencesDialog,
+    which handles dirty-check on switch and refreshes its own state.
+    """
+
+    profile_switch_requested = Signal(object)   # Path | None
+    profile_created = Signal(str)               # profile name
+    profile_renamed = Signal(object, object)    # (old_path, new_path)
+    profile_deleted = Signal(object)            # Path
+
+    def __init__(self, config_path: Path | None = None, parent=None) -> None:
+        super().__init__(parent)
+        self._active_path: Path | None = config_path  # None == default config.toml
+
+        self._list = QListWidget()
+        self._list.itemSelectionChanged.connect(self._update_button_states)
+        self._list.itemDoubleClicked.connect(lambda _i: self._on_switch())
+
+        self._switch_btn = QPushButton("Switch to selected")
+        self._switch_btn.setToolTip(
+            "Reload the window against the selected profile. Unsaved edits "
+            "in other tabs will prompt to Save / Discard / Cancel."
+        )
+        self._switch_btn.clicked.connect(self._on_switch)
+
+        self._open_btn = QPushButton("Open in editor")
+        self._open_btn.setToolTip("Open the selected profile in $EDITOR / xdg-open.")
+        self._open_btn.clicked.connect(self._on_open)
+
+        self._new_defaults_btn = QPushButton("New from defaults…")
+        self._new_defaults_btn.setToolTip(
+            "Create a new profile pre-populated with archward defaults."
+        )
+        self._new_defaults_btn.clicked.connect(self._on_new_from_defaults)
+
+        self._save_as_btn = QPushButton("Save current as new…")
+        self._save_as_btn.setToolTip(
+            "Snapshot the current dialog state into a new profile file. "
+            "Does not switch to it."
+        )
+        self._save_as_btn.clicked.connect(self._on_save_as)
+
+        self._rename_btn = QPushButton("Rename…")
+        self._rename_btn.setToolTip(
+            "Rename the selected profile file. The default config cannot be renamed."
+        )
+        self._rename_btn.clicked.connect(self._on_rename)
+
+        self._delete_btn = QPushButton("Delete…")
+        self._delete_btn.setToolTip(
+            "Delete the selected profile file. The active profile and the "
+            "default config cannot be deleted."
+        )
+        self._delete_btn.clicked.connect(self._on_delete)
+
+        # Two-column button grid: cheap and predictable.
+        btn_row1 = QHBoxLayout()
+        btn_row1.addWidget(self._switch_btn)
+        btn_row1.addWidget(self._open_btn)
+        btn_row2 = QHBoxLayout()
+        btn_row2.addWidget(self._new_defaults_btn)
+        btn_row2.addWidget(self._save_as_btn)
+        btn_row3 = QHBoxLayout()
+        btn_row3.addWidget(self._rename_btn)
+        btn_row3.addWidget(self._delete_btn)
+
+        self._summary = _help_label("")
+        self._hint = _help_label(
+            "Switching reloads the window against the selected profile. "
+            "Refused while a pipeline is running."
+        )
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self._list, 1)
+        layout.addLayout(btn_row1)
+        layout.addLayout(btn_row2)
+        layout.addLayout(btn_row3)
+        layout.addWidget(self._summary)
+        layout.addWidget(self._hint)
+
+        self.refresh_list(self._active_path)
+
+    # ── Public API ────────────────────────────────────────────────────────
+
+    def set_active(self, config_path: Path | None) -> None:
+        """Update which row carries the active marker; re-render."""
+        self._active_path = config_path
+        self.refresh_list(self._active_path)
+
+    def refresh_list(self, active: Path | None) -> None:
+        """Rebuild the list from disk; preserve active marker; restore selection."""
+        self._active_path = active
+        prev_selected_path = self._selected_path()
+
+        self._list.clear()
+
+        # Row 0 is always the default config (pseudo-profile).
+        default_path = default_config_path()
+        default_item = QListWidgetItem(
+            self._format_row(name="(default)", path=default_path, is_active=(active is None))
+        )
+        default_item.setData(Qt.ItemDataRole.UserRole, default_path)
+        default_item.setData(_DEFAULT_ROLE, True)
+        self._list.addItem(default_item)
+
+        for name in config_paths.iter_profiles():
+            p = config_paths.profile_config_path(name)
+            is_active = (active is not None and p == active)
+            item = QListWidgetItem(self._format_row(name=name, path=p, is_active=is_active))
+            item.setData(Qt.ItemDataRole.UserRole, p)
+            item.setData(_DEFAULT_ROLE, False)
+            self._list.addItem(item)
+
+        # Restore selection (prefer previous; otherwise select the active row).
+        target = prev_selected_path or (active if active is not None else default_path)
+        for i in range(self._list.count()):
+            if self._list.item(i).data(Qt.ItemDataRole.UserRole) == target:
+                self._list.setCurrentRow(i)
+                break
+        else:
+            self._list.setCurrentRow(0)
+
+        self._update_summary()
+        self._update_button_states()
+
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _format_row(*, name: str, path: Path, is_active: bool) -> str:
+        marker = "★ " if is_active else "  "
+        return f"{marker}{name}    {path}"
+
+    def _selected_item(self) -> QListWidgetItem | None:
+        items = self._list.selectedItems()
+        return items[0] if items else None
+
+    def _selected_path(self) -> Path | None:
+        item = self._selected_item()
+        if item is None:
+            return None
+        return item.data(Qt.ItemDataRole.UserRole)
+
+    def _selected_is_default(self) -> bool:
+        item = self._selected_item()
+        return bool(item and item.data(_DEFAULT_ROLE))
+
+    def _selected_is_active(self) -> bool:
+        sel = self._selected_path()
+        if sel is None:
+            return False
+        if self._active_path is None:
+            return self._selected_is_default()
+        return sel == self._active_path
+
+    def _update_summary(self) -> None:
+        if self._active_path is None:
+            self._summary.setText(f"Active: (default) — {default_config_path()}")
+        else:
+            self._summary.setText(
+                f"Active: {self._active_path.stem} — {self._active_path}"
             )
+
+    def _update_button_states(self) -> None:
+        item_selected = self._selected_item() is not None
+        is_default = self._selected_is_default()
+        is_active = self._selected_is_active()
+        self._switch_btn.setEnabled(item_selected and not is_active)
+        self._open_btn.setEnabled(item_selected)
+        self._rename_btn.setEnabled(item_selected and not is_default)
+        self._delete_btn.setEnabled(item_selected and not is_default and not is_active)
+
+    # ── Action slots ──────────────────────────────────────────────────────
+
+    def _on_switch(self) -> None:
+        item = self._selected_item()
+        if item is None or self._selected_is_active():
+            return
+        target = None if item.data(_DEFAULT_ROLE) else item.data(Qt.ItemDataRole.UserRole)
+        self.profile_switch_requested.emit(target)
+
+    def _on_open(self) -> None:
+        path = self._selected_path()
+        if path is not None:
+            _open_in_editor(self, path)
+
+    def _on_new_from_defaults(self) -> None:
+        name = self._prompt_for_new_name("New profile (from defaults)")
+        if name is None:
+            return
+        try:
+            path = config_paths.profile_config_path(name)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid name", str(e))
+            return
+        try:
+            write_config(default_config(), path)
+        except OSError as e:
+            QMessageBox.critical(self, "Create failed", f"Could not write {path}:\n{e}")
+            return
+        self.profile_created.emit(name)
+        self.refresh_list(self._active_path)
+        self._select_path(path)
+
+    def _on_save_as(self) -> None:
+        # Defer to the parent dialog so it can build the draft via _build_draft.
+        # The actual write happens in the dialog's slot to keep all validation
+        # and tab-orchestration logic there.
+        name = self._prompt_for_new_name("Save current state as new profile")
+        if name is None:
+            return
+        # Emit a sentinel: profile_created with a leading "@save-as:" prefix
+        # would be a hack. Cleaner: dedicated signal.
+        self.save_current_as_requested.emit(name)
+
+    save_current_as_requested = Signal(str)  # profile name
+
+    def _on_rename(self) -> None:
+        if self._selected_is_default():
+            return
+        old_path = self._selected_path()
+        if old_path is None:
+            return
+        new_name = self._prompt_for_new_name(
+            "Rename profile",
+            default=old_path.stem,
+        )
+        if new_name is None or new_name == old_path.stem:
+            return
+        try:
+            new_path = config_paths.profile_config_path(new_name)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid name", str(e))
+            return
+        try:
+            old_path.rename(new_path)
+        except OSError as e:
+            QMessageBox.critical(self, "Rename failed", f"Could not rename:\n{e}")
+            return
+        self.profile_renamed.emit(old_path, new_path)
+        # If active was renamed, the parent will update _active_path and
+        # then call refresh; until then, optimistically update locally.
+        if self._active_path == old_path:
+            self._active_path = new_path
+        self.refresh_list(self._active_path)
+        self._select_path(new_path)
+
+    def _on_delete(self) -> None:
+        if self._selected_is_default() or self._selected_is_active():
+            return
+        path = self._selected_path()
+        if path is None:
+            return
+        button = QMessageBox.question(
+            self,
+            "Delete profile",
+            f"Delete profile {path.stem!r}?\n\n{path}",
+        )
+        if button != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            path.unlink()
+        except OSError as e:
+            QMessageBox.critical(self, "Delete failed", f"Could not delete {path}:\n{e}")
+            return
+        self.profile_deleted.emit(path)
+        self.refresh_list(self._active_path)
+
+    # ── Sub-prompts ───────────────────────────────────────────────────────
+
+    def _prompt_for_new_name(self, title: str, *, default: str = "") -> str | None:
+        """Prompt for a profile name; loop until valid + non-colliding or canceled."""
+        text = default
+        while True:
+            name, ok = QInputDialog.getText(
+                self,
+                title,
+                "Profile name (letters, digits, _ and -; must start alphanumeric):",
+                text=text,
+            )
+            if not ok:
+                return None
+            name = name.strip()
+            if not config_paths.valid_profile_name(name):
+                QMessageBox.warning(
+                    self,
+                    "Invalid name",
+                    f"{name!r} is not a valid profile name. Use letters, digits, "
+                    "underscore, or dash; must start with a letter or digit; "
+                    "max 64 characters.",
+                )
+                text = name
+                continue
+            target = config_paths.profile_config_path(name)
+            if target.exists() and name != default:
+                QMessageBox.warning(
+                    self,
+                    "Already exists",
+                    f"A profile named {name!r} already exists at:\n{target}",
+                )
+                text = name
+                continue
+            return name
+
+    def _select_path(self, path: Path) -> None:
+        for i in range(self._list.count()):
+            if self._list.item(i).data(Qt.ItemDataRole.UserRole) == path:
+                self._list.setCurrentRow(i)
+                return
 
 
 # ── Dialog ───────────────────────────────────────────────────────────────
@@ -584,13 +925,20 @@ class PreferencesDialog(QDialog):
     """Modal preferences editor."""
 
     config_saved = Signal(object)  # ConfigModel — emitted after Save succeeds
+    profile_switch_requested = Signal(object)  # Path | None — relayed up to MainWindow
 
-    def __init__(self, cfg: ConfigModel, parent=None) -> None:
+    def __init__(
+        self,
+        cfg: ConfigModel,
+        config_path: Path | None = None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("archward — Preferences")
+        self._set_title_for_path(config_path)
         self.resize(900, 700)
 
         self._cfg = cfg
+        self._config_path = config_path
 
         self._tabs: list[_Tab] = [
             _GeneralTab(),
@@ -616,13 +964,21 @@ class PreferencesDialog(QDialog):
             "Privilege",
             "Hooks",
         ]
-        self._advanced = _AdvancedTab()
+        self._advanced = _AdvancedTab(config_path=config_path)
         self._advanced.redetect_requested.connect(self._on_redetect)
         self._advanced.reset_requested.connect(self._on_reset)
+
+        self._profiles = _ProfilesTab(config_path=config_path)
+        self._profiles.profile_switch_requested.connect(self._on_profile_switch)
+        self._profiles.save_current_as_requested.connect(self._on_save_current_as)
+        self._profiles.profile_renamed.connect(self._on_profile_renamed)
+        # profile_created / profile_deleted are informational only — the tab
+        # already refreshed its own list, and the dialog has nothing to do.
 
         self._tab_widget = QTabWidget()
         for label, tab in zip(labels, self._tabs):
             self._tab_widget.addTab(tab, label)
+        self._tab_widget.addTab(self._profiles, "Profiles")
         self._tab_widget.addTab(self._advanced, "Advanced")
 
         buttons = QDialogButtonBox(
@@ -661,9 +1017,10 @@ class PreferencesDialog(QDialog):
             )
             return
         try:
-            path = write_config(new_cfg)
+            path = write_config(new_cfg, self._config_path)
         except OSError as e:
-            QMessageBox.critical(self, "Save failed", f"Could not write {default_config_path()}:\n{e}")
+            target = self._config_path if self._config_path is not None else default_config_path()
+            QMessageBox.critical(self, "Save failed", f"Could not write {target}:\n{e}")
             return
         self._cfg = new_cfg
         log.info("preferences saved to %s", path)
@@ -732,6 +1089,132 @@ class PreferencesDialog(QDialog):
             return
         self._cfg = default_config()
         self._load_all()
+
+    # ── Profile-tab handlers ──────────────────────────────────────────────
+
+    def _set_title_for_path(self, config_path: Path | None) -> None:
+        if config_path is not None:
+            self.setWindowTitle(f"archward — Preferences (profile: {config_path.stem})")
+        else:
+            self.setWindowTitle("archward — Preferences")
+
+    def _is_dirty(self) -> bool | None:
+        """True if the draft differs from self._cfg, False if equal, None on
+        validation error (caller decides how to handle)."""
+        try:
+            draft = self._build_draft()
+        except ValidationError:
+            return None
+        return draft != self._cfg
+
+    def _on_profile_switch(self, target_path) -> None:
+        """Dirty-check, then relay the switch up to MainWindow.
+
+        target_path is Path | None (None == default config).
+        """
+        dirty = self._is_dirty()
+        if dirty is None:
+            QMessageBox.warning(
+                self,
+                "Invalid configuration",
+                "Fix validation errors in the other tabs before switching profiles.",
+            )
+            return
+
+        if dirty:
+            current_label = (
+                self._config_path.stem if self._config_path is not None else "(default)"
+            )
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle("Unsaved changes")
+            box.setText(f"You have unsaved edits in the current profile ({current_label}).")
+            box.setInformativeText(
+                "Save them, discard them, or cancel the switch?"
+            )
+            save_btn = box.addButton("Save and switch", QMessageBox.ButtonRole.AcceptRole)
+            discard_btn = box.addButton("Discard and switch", QMessageBox.ButtonRole.DestructiveRole)
+            cancel_btn = box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(cancel_btn)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is cancel_btn:
+                return
+            if clicked is save_btn:
+                try:
+                    draft = self._build_draft()
+                    saved_path = write_config(draft, self._config_path)
+                except (ValidationError, OSError) as e:
+                    QMessageBox.critical(self, "Save failed", str(e))
+                    return
+                self._cfg = draft
+                log.info("preferences saved to %s (pre-switch)", saved_path)
+                self.config_saved.emit(draft)
+            # Discard falls through without saving.
+
+        # Relay up; MainWindow updates self.cfg/strategy/logging/title and
+        # then calls back via apply_profile_switch() to refresh this dialog.
+        self.profile_switch_requested.emit(target_path)
+
+    def apply_profile_switch(self, new_cfg: ConfigModel, new_path: Path | None) -> None:
+        """Called by MainWindow after it has rebuilt its state, so the open
+        dialog can re-render against the new profile without closing."""
+        self._cfg = new_cfg
+        self._config_path = new_path
+        self._set_title_for_path(new_path)
+        self._advanced.set_active_path(
+            new_path if new_path is not None else default_config_path()
+        )
+        self._profiles.set_active(new_path)
+        self._load_all()
+
+    def _on_save_current_as(self, name: str) -> None:
+        try:
+            target = config_paths.profile_config_path(name)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid name", str(e))
+            return
+        try:
+            draft = self._build_draft()
+        except ValidationError as e:
+            QMessageBox.critical(
+                self,
+                "Invalid configuration",
+                f"Fix validation errors before saving as a new profile:\n\n{e}",
+            )
+            return
+        try:
+            write_config(draft, target)
+        except OSError as e:
+            QMessageBox.critical(self, "Save failed", f"Could not write {target}:\n{e}")
+            return
+        log.info("saved current draft to new profile %s", target)
+        self._profiles.refresh_list(self._config_path)
+        self._profiles._select_path(target)
+
+    def _on_profile_renamed(self, old_path, new_path) -> None:
+        if self._config_path != old_path:
+            return  # A non-active profile was renamed; dialog state unaffected.
+
+        # Active profile was renamed. The file on disk is already at
+        # new_path (the Profiles tab moved it via Path.rename). If the
+        # dialog holds unsaved edits, persist them to the new path so the
+        # MainWindow reload doesn't clobber the user's draft.
+        dirty = self._is_dirty()
+        if dirty:
+            try:
+                draft = self._build_draft()
+                write_config(draft, new_path)
+                self._cfg = draft
+                log.info("preserved draft across active-profile rename → %s", new_path)
+            except (ValidationError, OSError) as e:
+                log.warning("could not preserve draft across rename: %s", e)
+
+        self._config_path = new_path
+        self._set_title_for_path(new_path)
+        self._advanced.set_active_path(new_path)
+        # Relay to MainWindow so its config_path / window title / status follow.
+        self.profile_switch_requested.emit(new_path)
 
 
 # ── Internal helpers (factored after the tabs for readability) ───────────

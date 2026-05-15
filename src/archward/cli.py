@@ -57,7 +57,28 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the AUR phase entirely (overrides config aur.enabled=true).",
     )
+    p.add_argument(
+        "--profile",
+        metavar="NAME",
+        default=None,
+        help="Use ~/.config/archward/profiles/<NAME>.toml instead of the "
+        "default config.toml. Name must be [A-Za-z0-9][A-Za-z0-9_-]{0,63}. "
+        "First-run bootstraps the profile file with defaults.",
+    )
     return p
+
+
+def _resolve_config_path(profile: str | None):
+    """Resolve --profile to a file path, or None for the default config."""
+    if profile is None:
+        return None
+    from archward.config import paths
+
+    try:
+        return paths.profile_config_path(profile)
+    except ValueError as e:
+        print(f"archward: {e}", file=sys.stderr)
+        sys.exit(2)
 
 
 def _install_sigint_handler(cancel_event: threading.Event) -> None:
@@ -89,7 +110,7 @@ def _install_sigint_handler(cancel_event: threading.Event) -> None:
     signal.signal(signal.SIGINT, handler)
 
 
-def _detect_command(yes: bool) -> int:
+def _detect_command(yes: bool, config_path) -> int:
     """Implement `archward --detect`. Returns the process exit code."""
     info = detect_distro()
     print(
@@ -99,7 +120,9 @@ def _detect_command(yes: bool) -> int:
     if not info.is_arch_based:
         return 2
 
-    cfg = load_config()
+    if config_path is not None:
+        print(f"profile: writing to {config_path}")
+    cfg = load_config(config_path)
     det = run_full_detection()
     diff = diff_against(cfg, det)
 
@@ -174,24 +197,25 @@ def _detect_command(yes: bool) -> int:
         return 0
 
     new_cfg = apply_detection(cfg, det, effective, accept_services=accept_services)
-    path = write_config(new_cfg)
+    path = write_config(new_cfg, config_path)
     print(f"wrote {path}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    config_path = _resolve_config_path(args.profile)
 
     if args.write_config:
         from archward.config.defaults import default_config
 
         cfg = default_config()
-        path = write_config(cfg)
+        path = write_config(cfg, config_path)
         print(f"wrote defaults to {path}")
         return 0
 
     if args.detect:
-        return _detect_command(yes=args.yes)
+        return _detect_command(yes=args.yes, config_path=config_path)
 
     mode = Mode.DRY_RUN if args.dry_run else (Mode.AUTO if args.auto else Mode.INTERACTIVE)
 
@@ -199,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     _install_sigint_handler(cancel_event)
 
     with acquire_lock():
-        cfg, strategy, bus = setup_app()
+        cfg, strategy, bus = setup_app(config_path=config_path)
         check_distro_or_exit(bus)
         result = run_pipeline(
             cfg,
@@ -248,8 +272,34 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def main_gui() -> int:
+def _build_gui_parser() -> argparse.ArgumentParser:
+    """Minimal argparse for archward-gui: --version and --profile NAME.
+
+    Mirrors the CLI flag set narrowly to what the GUI session honors. Other
+    flags (--dry-run, --auto, --yes, --no-aur) are CLI-only because the
+    equivalent GUI behaviors are driven by toolbar actions, not invocation.
+    """
+    p = argparse.ArgumentParser(
+        prog="archward-gui",
+        description="Safe update pipeline for Arch-based Linux distributions (GUI).",
+    )
+    p.add_argument("--version", action="version", version=f"archward {__version__}")
+    p.add_argument(
+        "--profile",
+        metavar="NAME",
+        default=None,
+        help="Use ~/.config/archward/profiles/<NAME>.toml instead of the "
+        "default config.toml. Name must be [A-Za-z0-9][A-Za-z0-9_-]{0,63}. "
+        "First-run bootstraps the profile file with defaults.",
+    )
+    return p
+
+
+def main_gui(argv: list[str] | None = None) -> int:
     """Launch the archward Qt GUI."""
+    args = _build_gui_parser().parse_args(argv)
+    config_path = _resolve_config_path(args.profile)
+
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError:
@@ -267,6 +317,6 @@ def main_gui() -> int:
     app.setApplicationDisplayName("Archward")     # human-readable name shown in title bars
     app.setOrganizationName("archward")
 
-    window = MainWindow()
+    window = MainWindow(config_path=config_path)
     window.show()
     return app.exec()
