@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.20"]
+build-backend = "hatchling.build"
+
+[project]
+name = "archward-verify-zerotier"
+version = "0.1.0"
+description = "archward verify plugin — post-update ZeroTier mesh health check"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Rob Petersen" }]
+requires-python = ">=3.11"
+dependencies = [
+  # archward provides the VerifyCheck model + CheckStatus enum. Pinned
+  # to the first release that ships the `archward.verify_checks` entry-
+  # point group with the (cfg, snapshot) signature.
+  "archward>=0.3.3",
+]
+
+# This is what makes the plugin show up in archward. archward discovers
+# every callable registered under this entry-point group on startup,
+# wraps each in a daemon-thread timeout, and surfaces the returned
+# VerifyCheck list in the verify view's `plugin` bucket.
+[project.entry-points."archward.verify_checks"]
+zerotier = "archward_verify_zerotier:verify"
+
+[tool.hatch.build.targets.wheel]
+# Single-module wheel: ship just the .py at the project root.
+include = ["archward_verify_zerotier.py"]
+sources = ["."]
+
+[tool.hatch.build.targets.wheel.force-include]
+"archward_verify_zerotier.py" = "archward_verify_zerotier.py"

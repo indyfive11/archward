@@ -40,10 +40,27 @@ You don't need defensive `try/except` boilerplate — let the exception
 propagate and archward will surface it to the user. The traceback
 also lands in `~/.local/state/archward/logs/archward.log`.
 
-## Minimal worked example
+## Complete worked example
 
-Skeleton for a `archward-verify-zfs` package that checks each ZFS pool
-on the host:
+For a real, installable, fully-tested plugin see
+**[`examples/archward-verify-zerotier/`](examples/archward-verify-zerotier/)**.
+It parses `zerotier-cli info -j` and `zerotier-cli listnetworks -j` and
+emits one PASS/WARN/FAIL VerifyCheck row per joined network — exactly
+the kind of structured-output check that's awkward in shell. It also
+demonstrates the cross-cutting concerns every plugin should handle:
+
+- Graceful behavior when the CLI isn't installed (return empty list).
+- Actionable error messages on auth failure (one WARN row with the
+  recovery commands in `detail`).
+- Subprocess timeouts (5 s defense-in-depth, on top of archward's 30 s
+  per-plugin timeout).
+- A test suite that stubs `subprocess.run` so the tests never hit a
+  real daemon.
+
+## Minimal sketch
+
+Skeleton for a hypothetical `archward-verify-zfs` package that checks
+each ZFS pool on the host:
 
 ```
 archward-verify-zfs/

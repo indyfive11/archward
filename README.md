@@ -358,7 +358,10 @@ full access to `ConfigModel` + `Snapshot`) that land in a `plugin`
 bucket alongside the built-ins. Useful when shell hooks aren't
 expressive enough (D-Bus probes, typed HTTP retry logic, structured
 log parsing). See **[`docs/plugins.md`](docs/plugins.md)** for the
-contract and a worked `archward-verify-zfs` skeleton.
+contract; a complete worked plugin lives in
+**[`docs/examples/archward-verify-zerotier/`](docs/examples/archward-verify-zerotier/)**
+— installable, tested, real-world: parses `zerotier-cli ... -j` and
+adds one PASS/WARN/FAIL row per joined network to the Verify view.
 
 **Out of scope (intentional):** running as a daemon, scheduling cron-style
 recurring updates, network-only / offline-only modes, distros not in the
