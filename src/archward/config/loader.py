@@ -30,6 +30,7 @@ from archward.models.config import (
     ConfigModel,
     GatesConfig,
     GeneralConfig,
+    HooksConfig,
     PacmanConfig,
     PacnewConfig,
     PrivilegeConfig,
@@ -53,6 +54,7 @@ _SECTIONS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("pacman", PacmanConfig),
     ("verify", VerifyConfig),
     ("privilege", PrivilegeConfig),
+    ("hooks", HooksConfig),
 )
 
 _CURRENT_SCHEMA_VERSION = 1

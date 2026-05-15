@@ -16,10 +16,12 @@ _PHASES: tuple[tuple[str, str], ...] = (
     ("snapshot", "Snapshot"),
     ("gates", "Gates"),
     ("risk", "Risk"),
+    ("hooks_pre", "Pre-hooks"),
     ("update_official", "Update (official)"),
     ("update_aur", "Update (AUR)"),
     ("pacnew", "Pacnew"),
     ("verify", "Verify"),
+    ("hooks_post", "Post-hooks"),
     ("result", "Result"),
 )
 

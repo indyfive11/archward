@@ -6,6 +6,75 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-05-14
+
+### Added
+
+- **Hook output visibility** — hook outcomes are now first-class GUI state,
+  not just log-pane text:
+  - **Phase rail** gains two new rows: `Pre-hooks` (between Risk and Update)
+    and `Post-hooks` (between Verify and Result). Each row shows pass/warn/
+    fail status from its hook outcomes, same icon system as other phases.
+  - **Verify view** gains a third bucket `hooks` alongside `universal` and
+    `services`. Each hook row is tagged `[pre]` or `[post]`, shows the
+    command (truncated to 70 chars; full command in the tooltip), exit
+    code, status, and a one-line preview of the captured output. Multi-line
+    output is attached as a child node.
+  - **`HookResult` model** captures command, exit code, status (PASS / FAIL /
+    TIMEOUT), output lines, and phase tag. `HookRunner` now returns
+    `HookRunOutcome(proceed, results)` so the pipeline can plumb per-hook
+    detail into `PipelineResult.pre_hook_results` /
+    `PipelineResult.post_hook_results`.
+  - Pipeline emits `PHASE_START` / `PHASE_RESULT` events for `hooks_pre` /
+    `hooks_post` carrying the hook-results payload, so the GUI absorbs and
+    renders them through the same routing path as other phases.
+
+- **Hooks** — fills in the `pipeline/hooks.py:HookRunner` stub that's been
+  reserved as a v2 seam since v0.1.0. Users can now wire shell commands
+  into two pipeline checkpoints:
+
+  - `[hooks].pre_update` — runs after risk-approval, before pacman -Syu.
+    Useful for "verify backup is fresh", custom notifications, etc.
+  - `[hooks].post_verify` — runs after the verify phase regardless of
+    update outcome. Useful for "sync new state to backup", report
+    generation, etc.
+
+  Each command runs via `/bin/sh -c <cmd>` so pipes, env vars, and
+  redirection all work without quoting gymnastics. `ARCHWARD_PHASE` is
+  injected into the env so hooks can distinguish pre_update vs post_verify.
+  Stdout/stderr from each hook is streamed into the archward log pane.
+
+- New TOML schema additions:
+  ```toml
+  [hooks]
+  pre_update = [
+      "rsync -a ~/Documents /mnt/backup/",
+      "echo Pre-update at $(date) >> ~/.archward-runs.log",
+  ]
+  post_verify = [
+      "notify-send 'archward done' \"$ARCHWARD_PHASE\"",
+  ]
+  timeout_seconds = 60                  # per-hook timeout
+  fail_pipeline_on_error = false        # default: warn only
+  ```
+
+  With `fail_pipeline_on_error = true`, any non-zero pre_update hook
+  aborts the update before pacman runs. post_verify hooks never abort
+  (the update already happened).
+
+- **Hooks tab in Preferences** — 10th editable schema tab joins the
+  existing 9. Two QPlainTextEdits (one command per line), a timeout
+  spinbox, and the fail-on-error checkbox. Help text follows the same
+  pattern as the rest of the dialog.
+
+### Tests
+
+- 148 unit tests (136 baseline + 12 covering HookRunner: empty pre/post
+  sets, success, failure-no-abort, failure-with-abort, abort-stops-second-
+  hook, no-abort-continues-past-failure, post-verify-never-aborts, timeout
+  kills hung hook, shell features via /bin/sh -c, captured output_lines,
+  phase tag propagation).
+
 ## [0.3.0] — 2026-05-14
 
 MINOR bump for a new capability: per-row deselect in the Risk view.
@@ -319,7 +388,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/indyfive11/archward/releases/tag/v0.3.1
 [0.3.0]: https://github.com/indyfive11/archward/releases/tag/v0.3.0
 [0.2.2]: https://github.com/indyfive11/archward/releases/tag/v0.2.2
 [0.2.1]: https://github.com/indyfive11/archward/releases/tag/v0.2.1

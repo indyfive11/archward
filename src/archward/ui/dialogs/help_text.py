@@ -165,6 +165,34 @@ HELP: dict[tuple[str, str], str] = {
         "(ksshaskpass → lxqt-openssh-askpass → ssh-askpass). Set this if "
         "your DE ships an askpass under a non-standard name."
     ),
+
+    # ── Hooks ──────────────────────────────────────────────────────────────
+    ("hooks", "_section"): (
+        "Optional shell commands that run at pipeline checkpoints. Useful "
+        "for: triggering a backup before the update, sending custom "
+        "notifications, syncing your dotfiles to a snapshot, etc. Commands "
+        "run via /bin/sh -c so pipes, env vars, redirection all work."
+    ),
+    ("hooks", "pre_update"): (
+        "One shell command per line. Each runs after risk-approval and "
+        "before pacman -Syu. Non-zero exit logs a warning; with "
+        "fail_pipeline_on_error=true a failure aborts the update entirely."
+    ),
+    ("hooks", "post_verify"): (
+        "One shell command per line. Each runs after the verify phase "
+        "regardless of update success or failure. Non-zero exits log a "
+        "warning but never abort the pipeline (the update already ran)."
+    ),
+    ("hooks", "timeout_seconds"): (
+        "Per-hook timeout. A hook hung waiting on input would otherwise "
+        "lock the pipeline forever; this kills it after N seconds. "
+        "Increase for legitimately slow hooks (rsync over slow links etc.)."
+    ),
+    ("hooks", "fail_pipeline_on_error"): (
+        "If checked, a non-zero exit from any pre_update hook aborts the "
+        "pipeline before pacman runs. Useful for 'verify backup is fresh' "
+        "hooks. post_verify hooks never abort regardless of this setting."
+    ),
 }
 
 

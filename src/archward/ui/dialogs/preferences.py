@@ -57,6 +57,7 @@ from archward.models.config import (
     ConfigModel,
     GatesConfig,
     GeneralConfig,
+    HooksConfig,
     PacmanConfig,
     PacnewConfig,
     PrivilegeConfig,
@@ -466,6 +467,65 @@ class _PrivilegeTab(_Tab):
         )
 
 
+class _HooksTab(_Tab):
+    section = "hooks"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._pre_update = _make_list_edit()
+        self._pre_update.setPlaceholderText(
+            "# One shell command per line\n"
+            "# e.g.:\n"
+            "rsync -a ~/Documents /mnt/backup/\n"
+            "echo Pre-update at $(date) >> ~/.archward-runs.log"
+        )
+        self._post_verify = _make_list_edit()
+        self._post_verify.setPlaceholderText(
+            "# e.g.:\n"
+            "/usr/bin/notify-send -u low 'archward done' \"RESULT: $ARCHWARD_PHASE\""
+        )
+        self._timeout = QSpinBox()
+        self._timeout.setRange(1, 3600)
+        self._timeout.setSuffix(" s")
+        self._fail_on_error = QCheckBox(
+            "Abort pipeline if any pre_update hook exits non-zero"
+        )
+
+        layout = QVBoxLayout(self)
+        section_help = _section_help("hooks")
+        if section_help is not None:
+            layout.addWidget(section_help)
+
+        layout.addWidget(_lbl("Pre-update hooks (run before pacman -Syu, one per line):"))
+        layout.addWidget(self._pre_update, stretch=1)
+        layout.addWidget(_help_label(help_text.get("hooks", "pre_update")))
+
+        layout.addWidget(_lbl("Post-verify hooks (run after verify phase, one per line):"))
+        layout.addWidget(self._post_verify, stretch=1)
+        layout.addWidget(_help_label(help_text.get("hooks", "post_verify")))
+
+        form = QFormLayout()
+        form.addRow("Per-hook timeout:", _field_with_help(self._timeout, "hooks", "timeout_seconds"))
+        form.addRow("", _field_with_help(self._fail_on_error, "hooks", "fail_pipeline_on_error"))
+        form_widget = QWidget()
+        form_widget.setLayout(form)
+        layout.addWidget(form_widget)
+
+    def load(self, cfg: ConfigModel) -> None:
+        self._pre_update.setPlainText(_tuple_to_lines(cfg.hooks.pre_update))
+        self._post_verify.setPlainText(_tuple_to_lines(cfg.hooks.post_verify))
+        self._timeout.setValue(cfg.hooks.timeout_seconds)
+        self._fail_on_error.setChecked(cfg.hooks.fail_pipeline_on_error)
+
+    def dump(self) -> HooksConfig:
+        return HooksConfig(
+            pre_update=_lines_to_tuple(self._pre_update.toPlainText()),
+            post_verify=_lines_to_tuple(self._post_verify.toPlainText()),
+            timeout_seconds=self._timeout.value(),
+            fail_pipeline_on_error=self._fail_on_error.isChecked(),
+        )
+
+
 class _AdvancedTab(QWidget):
     """Not a _Tab — doesn't have load/dump. Provides actions that mutate the
     parent dialog's draft config."""
@@ -542,6 +602,7 @@ class PreferencesDialog(QDialog):
             _PacmanTab(),
             _VerifyTab(),
             _PrivilegeTab(),
+            _HooksTab(),
         ]
         labels = [
             "General",
@@ -553,6 +614,7 @@ class PreferencesDialog(QDialog):
             "Pacman",
             "Verify",
             "Privilege",
+            "Hooks",
         ]
         self._advanced = _AdvancedTab()
         self._advanced.redetect_requested.connect(self._on_redetect)

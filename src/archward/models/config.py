@@ -94,6 +94,26 @@ class PrivilegeConfig(BaseModel):
     askpass: str = ""  # override path; default auto-discovers
 
 
+class HooksConfig(BaseModel):
+    """User-configurable shell commands run at pipeline checkpoints.
+
+    pre_update commands run after risk-approval, before pacman -Syu. Any
+    non-zero exit logs a warning by default; set fail_pipeline_on_error=true
+    to abort the whole pipeline (useful for "verify backup is fresh" hooks
+    that should refuse the update if they fail).
+
+    post_verify commands always run after the verify phase regardless of
+    success/failure, and never abort the pipeline (the update already ran).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pre_update: tuple[str, ...] = ()
+    post_verify: tuple[str, ...] = ()
+    timeout_seconds: int = 60
+    fail_pipeline_on_error: bool = False
+
+
 class ConfigModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -107,3 +127,4 @@ class ConfigModel(BaseModel):
     pacman: PacmanConfig
     verify: VerifyConfig
     privilege: PrivilegeConfig
+    hooks: HooksConfig = HooksConfig()

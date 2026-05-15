@@ -40,6 +40,7 @@ from archward.events import EventBus, PhaseEvent, PhaseEventKind
 from archward.logging_setup import setup_logging
 from archward.models.config import ConfigModel
 from archward.models.gate import GateResult
+from archward.models.hook import HookResult
 from archward.models.pacnew import PacnewFile
 from archward.models.update import PendingUpdate
 from archward.models.verify import VerifyResult
@@ -68,15 +69,19 @@ log = logging.getLogger(__name__)
 # No mapping for "result" — the result is shown in a persistent bottom banner
 # rather than swapping the central view; the user keeps their last phase
 # context (risk for dry-run, verify for real updates) visible after completion.
+# hooks_pre/hooks_post route to the Verify view, which has a dedicated
+# "hooks" bucket for their output (v0.3.1).
 _PHASE_TO_VIEW = {
     "preflight": "gates",
     "snapshot": "snapshot",
     "gates": "gates",
     "risk": "risk",
+    "hooks_pre": "verify",
     "update_official": "update",
     "update_aur": "update",
     "pacnew": "pacnew",
     "verify": "verify",
+    "hooks_post": "verify",
 }
 
 
@@ -358,6 +363,12 @@ class MainWindow(QMainWindow):
         elif ev.phase == "verify" and "result" in ev.payload:
             vr = VerifyResult.model_validate(ev.payload["result"])
             self._views["verify"].set_result(vr)
+        elif ev.phase == "hooks_pre" and "hook_results" in ev.payload:
+            hooks = tuple(HookResult.model_validate(h) for h in ev.payload["hook_results"])
+            self._views["verify"].set_pre_hooks(hooks)
+        elif ev.phase == "hooks_post" and "hook_results" in ev.payload:
+            hooks = tuple(HookResult.model_validate(h) for h in ev.payload["hook_results"])
+            self._views["verify"].set_post_hooks(hooks)
 
     # ── Completion ─────────────────────────────────────────────────────────
 

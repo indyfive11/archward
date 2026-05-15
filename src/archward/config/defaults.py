@@ -13,6 +13,7 @@ from archward.models.config import (
     ConfigModel,
     GatesConfig,
     GeneralConfig,
+    HooksConfig,
     PacmanConfig,
     PacnewConfig,
     PacnewRule,
@@ -157,4 +158,10 @@ def default_config() -> ConfigModel:
             reboot_log="/var/log/reboot-recommendation-trigger.log",
         ),
         privilege=PrivilegeConfig(mode="auto", askpass=""),
+        hooks=HooksConfig(
+            pre_update=(),
+            post_verify=(),
+            timeout_seconds=60,
+            fail_pipeline_on_error=False,
+        ),
     )

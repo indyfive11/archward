@@ -128,6 +128,46 @@ hand-edits work too. Run `archward --detect` whenever your kernel set, AUR
 helper, or enabled services change — it proposes a diff and asks before
 applying.
 
+## User-defined hooks
+
+archward's built-in pipeline handles the universal safe-update concerns —
+snapshot, gates, risk, pacman + AUR, pacnew, verify. For checks that are
+specific to *your* machine — external backup freshness, HTTP service
+health, mountpoint state, VPN connectivity, specific bind addresses —
+wire shell commands into the **pre-update** or **post-verify**
+checkpoints via the `[hooks]` section of the config (or the Preferences
+→ Hooks tab):
+
+```toml
+[hooks]
+pre_update = [
+    # Refuse update if backup is stale — your rollback path, your call:
+    'find /mnt/backup/daily/ -mmin -1560 -type f 2>/dev/null | grep -q . && echo "OK: backup fresh" || { echo "WARN: backup stale"; exit 1; }',
+]
+post_verify = [
+    # Catch "service active but HTTP wedged" mid-startup:
+    'curl -sf --max-time 5 http://localhost:8096/health >/dev/null && echo "OK: service responding" || echo "WARN: service HTTP down"',
+    # Catch silent NFS / FUSE drop-outs:
+    'mountpoint -q /mnt/backup && echo "OK: /mnt/backup mounted" || echo "WARN: /mnt/backup not mounted"',
+]
+timeout_seconds = 60
+fail_pipeline_on_error = false   # set to true to make pre_update hooks enforcing
+```
+
+Each command runs via `/bin/sh -c`, so pipes, env vars (`$ARCHWARD_PHASE`
+is injected), and redirection all work. Hook output appears live in the
+GUI log pane, lands in `archward.log`, and renders as a `hooks` bucket
+in the Verify view at completion (one row per hook with status icon and
+the last line of output).
+
+**See [`docs/hooks.md`](docs/hooks.md) for the full guide** — design
+patterns (the OK/WARN convention, why backup-freshness hooks are a
+"canary" for backup pipeline health, when to use enforcing vs
+informational), worked examples for common health checks (HTTP probes,
+interface presence, real-time reachability, specific bind verification),
+and safety knobs (per-hook timeout, the `fail_pipeline_on_error` flag,
+idempotence requirements).
+
 ## GUI walkthrough
 
 The single-window GUI mirrors the CLI pipeline:

@@ -845,6 +845,34 @@ class HookRunner:
 ### Custom verify probes
 v1 verify is fixed list + service iteration. v2 introduces an entry-points group `archward.verify_checks` with contract `(cfg, snapshot) -> list[VerifyCheck]`. The seam is `Verifier.collect_checkers()` in `verify_phase.py` — today hard-coded, tomorrow scans `importlib.metadata.entry_points()`.
 
+### Auto-prune missing services on `--detect`
+
+Today `archward --detect` only proposes *additions* to `services.to_verify` —
+it diffs the detected enabled+active services against the configured list
+and surfaces new names. If a unit later gets removed from disk (file
+deleted, package uninstalled), it lingers in `services.to_verify` and the
+next post-update verify FAILs on it. The user has to hand-edit the config.
+
+v2 should extend `config/detect.py:diff_against()` and `apply_detection()`
+to also surface *stale removals* — names in `cfg.services.to_verify` that
+no longer resolve to a real unit (`systemctl cat <unit>` returns nonzero).
+UX:
+- The detect command shows a third section in its diff output:
+  ```
+  - services.to_verify: remove 1 stale unit(s):
+      old-thing.service  (no such unit file)
+  ```
+- Treated as opt-in (same as service additions): user gets a separate
+  Y/N prompt to confirm removals so accidental unit-file moves don't
+  silently drop the entry.
+
+Implementation hint: add `detect_stale_services(cfg) -> list[str]` to
+`config/detect.py` that iterates `cfg.services.to_verify` and tests each
+with `systemctl cat <unit>` (exits 1 if no unit). Extend `ConfigDiff` with
+a `service_removals: tuple[str, ...]` field; thread through
+`apply_detection()` with an `accept_service_removals: bool` parameter
+that mirrors the existing `accept_services` flag.
+
 ### Preferences dialog — inline help text
 
 v1 Preferences shows widget labels only. A new user opening Gates sees

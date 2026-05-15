@@ -18,6 +18,7 @@ from archward.events import EventBus
 from archward.models.aur import AurResult
 from archward.models.config import ConfigModel
 from archward.models.gate import GateStatus
+from archward.models.hook import HookResult
 from archward.models.update import PendingUpdate, RiskLevel
 from archward.models.verify import VerifyResult
 from archward.pacman import query as pq
@@ -51,6 +52,8 @@ class PipelineResult:
     aur: AurResult | None = None
     verify: VerifyResult | None = None
     pacnew_count: int = 0
+    pre_hook_results: tuple[HookResult, ...] = ()
+    post_hook_results: tuple[HookResult, ...] = ()
     summary: ReportSummary | None = None
     aborted_reason: str | None = None
 
@@ -109,7 +112,7 @@ def run_pipeline(
 ) -> PipelineResult:
     """Run the full pipeline. Never raises on update failure — see PipelineResult."""
     result = PipelineResult()
-    hooks = HookRunner(None)
+    hooks = HookRunner(cfg.hooks, bus)
     if prompter is None:
         prompter = _default_prompter(mode, auto_yes)
 
@@ -240,8 +243,19 @@ def run_pipeline(
                 )
                 result.deselected_packages = tuple(ignored)
 
-    # ── Hooks (v2 stub) ─────────────────────────────────────────────────────
-    hooks.run_pre_update(None)
+    # ── Pre-update hooks ────────────────────────────────────────────────────
+    pre_outcome = hooks.run_pre_update(None)
+    result.pre_hook_results = tuple(pre_outcome.results)
+    if not pre_outcome.proceed:
+        result.aborted_reason = "pre_update hook failed (fail_pipeline_on_error=true)"
+        result.summary = derive_result(
+            preflight_failed=True,
+            update_exit_code=None,
+            pending=pending,
+            verify=None,
+            pacnew_count=0,
+        )
+        return result
 
     # ── Update official ─────────────────────────────────────────────────────
     if pending:
@@ -274,7 +288,8 @@ def run_pipeline(
     if cfg.verify.enabled:
         verify = verify_phase.run_verify(cfg, snapshot.meta.path, bus)
         result.verify = verify
-        hooks.run_post_verify(None, verify)
+        post_outcome = hooks.run_post_verify(None, verify)
+        result.post_hook_results = tuple(post_outcome.results)
     else:
         result.verify = None
 
