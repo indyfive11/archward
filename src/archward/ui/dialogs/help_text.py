@@ -202,6 +202,23 @@ HELP: dict[tuple[str, str], str] = {
         "pipeline before pacman runs. Useful for 'verify backup is fresh' "
         "hooks. post_verify hooks never abort regardless of this setting."
     ),
+
+    # ── Profiles ──────────────────────────────────────────────────────────
+    ("profiles", "_section"): (
+        "Profiles are named alternate config files at "
+        "~/.config/archward/profiles/<NAME>.toml. The default config.toml "
+        "is shown as a switchable pseudo-profile (★ marks the active one). "
+        "Use profiles when one machine wears multiple hats — lab vs daily, "
+        "lenient vs enforcing hooks, baremetal vs VM — without juggling "
+        "files. Switching reloads the running window in place; refused "
+        "while a pipeline is running."
+    ),
+    ("profiles", "remember_last_used"): (
+        "When enabled, archward-gui launched without --profile reopens "
+        "whatever profile was active when you last closed the window. "
+        "Disabled by default to avoid hidden state. Only affects the GUI; "
+        "the CLI always honors --profile explicitly."
+    ),
 }
 
 

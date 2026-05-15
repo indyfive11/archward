@@ -189,6 +189,14 @@ disabled for it). If you switch with unsaved edits, you'll be prompted
 to Save (writes to the *current* profile), Discard, or Cancel.
 Switching is refused while a pipeline is running.
 
+There's also an optional **"Remember last-used profile across launches"**
+checkbox at the bottom of the tab. When enabled, `archward-gui` launched
+without `--profile` reopens whatever profile was active when you last
+closed the window. Off by default (no hidden state); backed by QSettings
+in `~/.config/archward/archward.conf` so the toggle and remembered path
+live separately from any profile's `config.toml`. CLI behavior is
+unchanged — `--profile` is always explicit on the command line.
+
 ## User-defined hooks
 
 archward's built-in pipeline handles the universal safe-update concerns —

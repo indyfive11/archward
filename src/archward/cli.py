@@ -343,6 +343,13 @@ def main_gui(argv: list[str] | None = None) -> int:
     app.setApplicationDisplayName("Archward")     # human-readable name shown in title bars
     app.setOrganizationName("archward")
 
+    # If --profile was NOT specified explicitly, consult the QSettings
+    # remember-last-used flag and use the previously-active profile.
+    # Requires QApplication to exist so QSettings resolves the right file.
+    if config_path is None:
+        from archward.ui.persistent_state import get_last_used_profile_path
+        config_path = get_last_used_profile_path()
+
     window = MainWindow(config_path=config_path)
     window.show()
     return app.exec()

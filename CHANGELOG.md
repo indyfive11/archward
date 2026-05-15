@@ -6,6 +6,49 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-05-14
+
+### Added
+
+- **Remember-last-used profile (opt-in).** A new checkbox at the bottom
+  of the Preferences → Profiles tab — "Remember last-used profile
+  across launches". When enabled, `archward-gui` launched without
+  `--profile` reopens whatever profile was active when you last closed
+  the window. Off by default to avoid hidden state. Only affects the
+  GUI; the CLI continues to honor `--profile` explicitly. Backed by
+  QSettings, so the toggle and the remembered path live in
+  `~/.config/archward/archward.conf` and are independent of any
+  profile's `config.toml`.
+
+  - New module `archward.ui.persistent_state` exposes
+    `get_remember_last_profile()`, `set_remember_last_profile()`,
+    `get_last_used_profile_path()`, `set_last_used_profile_path()`,
+    `clear_last_used_profile_path()`. Self-protecting: returns `None`
+    if the file no longer exists, so a profile you delete won't
+    resurrect a stale path on the next launch.
+  - `MainWindow.__init__()` writes the active path to QSettings on
+    every successful construction (if the toggle is on).
+  - `MainWindow._on_profile_switch_requested()` writes the new path
+    on every in-window switch (same condition).
+  - `cli.main_gui()` consults QSettings after creating the
+    `QApplication` (so the org/app names are set) and uses the
+    remembered path only when `--profile` wasn't passed.
+
+- **Profiles tab section help.** Italic intro paragraph at the top of
+  the Profiles tab explaining what profiles are and the switch
+  semantics. Matches the section-help pattern already used by the
+  Hooks and Risk tabs. Closes a minor polish gap: the Profiles tab
+  shipped in v0.3.2 without a section intro.
+
+### Tests
+
+211 → **219**. New `tests/unit/test_persistent_state.py` covers the
+QSettings round-trip: default-off, set-persists, returns-None when
+toggle is off / file is missing / key is cleared, and the
+`None`-path-records-default semantics. Tests use an isolated
+QSettings storage path so the user's real `archward.conf` is never
+touched.
+
 ## [0.3.3] — 2026-05-14
 
 ### Added
@@ -544,7 +587,8 @@ Initial release.
   probes, HTTP health checks, port-listen, mountpoint checks reserved for
   v2 hooks (`pipeline/hooks.py` is a stub today).
 
-[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/indyfive11/archward/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/indyfive11/archward/releases/tag/v0.3.4
 [0.3.3]: https://github.com/indyfive11/archward/releases/tag/v0.3.3
 [0.3.2]: https://github.com/indyfive11/archward/releases/tag/v0.3.2
 [0.3.1]: https://github.com/indyfive11/archward/releases/tag/v0.3.1

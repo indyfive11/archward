@@ -688,15 +688,41 @@ class _ProfilesTab(QWidget):
             "Refused while a pipeline is running."
         )
 
+        # Remember-last-used toggle backed by QSettings (independent of the
+        # active profile's config.toml — it's GUI session state).
+        from archward.ui import persistent_state as _ps  # local: PySide6-dependent
+        self._remember_last = QCheckBox("Remember last-used profile across launches")
+        self._remember_last.setChecked(_ps.get_remember_last_profile())
+        self._remember_last.toggled.connect(self._on_remember_toggled)
+
         layout = QVBoxLayout(self)
+        section_help = _section_help("profiles")
+        if section_help is not None:
+            layout.addWidget(section_help)
         layout.addWidget(self._list, 1)
         layout.addLayout(btn_row1)
         layout.addLayout(btn_row2)
         layout.addLayout(btn_row3)
         layout.addWidget(self._summary)
         layout.addWidget(self._hint)
+        layout.addWidget(self._remember_last)
+        remember_help = _help_label(help_text.get("profiles", "remember_last_used"))
+        if remember_help.text():
+            layout.addWidget(remember_help)
 
         self.refresh_list(self._active_path)
+
+    def _on_remember_toggled(self, checked: bool) -> None:
+        from archward.ui import persistent_state as _ps
+        _ps.set_remember_last_profile(checked)
+        if not checked:
+            # Drop the stored path so a later re-enable doesn't read a
+            # stale value from a profile the user may have since deleted.
+            _ps.clear_last_used_profile_path()
+        else:
+            # Seed with the currently-active profile so the next launch
+            # without --profile actually reopens what's open now.
+            _ps.set_last_used_profile_path(self._active_path)
 
     # ── Public API ────────────────────────────────────────────────────────
 

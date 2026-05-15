@@ -142,6 +142,13 @@ class MainWindow(QMainWindow):
             self.setWindowTitle("Archward")
         self.resize(1200, 800)
 
+        # Persist the active profile path so the next launch (without
+        # --profile) can reopen it if the remember-last-used toggle is on.
+        # No-op when the toggle is off; safe to call unconditionally.
+        from archward.ui.persistent_state import set_last_used_profile_path, get_remember_last_profile
+        if get_remember_last_profile():
+            set_last_used_profile_path(config_path)
+
         # ── State ──────────────────────────────────────────────────────────
         self.cfg = build_config(config_path)
         setup_logging(self.cfg.general.log_dir)
@@ -485,6 +492,10 @@ class MainWindow(QMainWindow):
             self.setWindowTitle("Archward")
             self._status.showMessage("Switched to default config.")
         log.info("profile switched to %s", new_path if new_path else "(default)")
+        # Persist as last-used if the QSettings toggle is on.
+        from archward.ui.persistent_state import set_last_used_profile_path, get_remember_last_profile
+        if get_remember_last_profile():
+            set_last_used_profile_path(new_path)
         # Refresh the still-open Preferences dialog so its widgets reflect
         # the newly-active profile without the user having to close + reopen.
         dialog.apply_profile_switch(self.cfg, new_path)
