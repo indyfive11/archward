@@ -36,6 +36,8 @@ def _seed_snapshot(snap_dir: Path, snap_id: str = "2026-05-15_134116") -> Path:
     (cfg_dir / "pacman.conf").write_text("# stub\n")
     pkg_dir = p / "packages"
     pkg_dir.mkdir()
+    # v0.4.4 F4: validate_snapshot() requires a non-empty all.txt too.
+    (pkg_dir / "all.txt").write_text("glibc 2.42-2\nnvidia 575.64.05-1\n")
     (pkg_dir / "critical.txt").write_text(
         "=== Critical package versions pre-update ===\n"
         "glibc: 2.42-2\nnvidia: 575.64.05-1\n"

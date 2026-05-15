@@ -404,6 +404,21 @@ class SnapshotBrowser(QDialog):
             f"<b>AUR helper detected:</b> {helper or 'unknown'}",
             f"<b>Path:</b> <code>{snap_path}</code>",
         ]
+        # v0.4.4 F4: surface incompleteness here, before the user tries a
+        # rollback action (the action handlers also hard-refuse).
+        from archward.pipeline.snapshot import validate_snapshot
+
+        problems = validate_snapshot(snap_path)
+        if problems:
+            meta_lines.append(
+                "<br><b style='color:#c0392b;'>⚠ Incomplete — cannot be "
+                "used as a rollback source:</b>"
+            )
+            meta_lines.extend(
+                f"<span style='color:#c0392b;'>&nbsp;&nbsp;&bull;&nbsp;{p}"
+                "</span>"
+                for p in problems
+            )
         self._meta_label.setText("<br>".join(meta_lines))
 
         self._render_configs(snap_path)
@@ -500,7 +515,28 @@ class SnapshotBrowser(QDialog):
         dlg = DiffDialog(Path(live_target), snap_file, self._strategy, parent=self)
         dlg.exec()
 
+    def _refuse_if_incomplete(self, snap_path: Path) -> bool:
+        """True (and shows a refusal dialog) when the snapshot can't back
+        a rollback. v0.4.4 F4: stop before any pacman/config mutation
+        instead of failing cryptically half-way through a restore."""
+        from archward.pipeline.snapshot import validate_snapshot
+
+        problems = validate_snapshot(snap_path)
+        if not problems:
+            return False
+        QMessageBox.critical(
+            self,
+            "Snapshot incomplete",
+            f"Snapshot <code>{snap_path.name}</code> cannot be used as a "
+            "rollback source:<br><br>"
+            + "<br>".join(f"&bull;&nbsp;{p}" for p in problems)
+            + "<br><br>Pick another snapshot from the list.",
+        )
+        return True
+
     def _on_restore_config(self, live_target: str, snap_file: Path, snap_path: Path) -> None:
+        if self._refuse_if_incomplete(snap_path):
+            return
         confirm = QMessageBox.question(
             self,
             "Restore config",
@@ -548,6 +584,8 @@ class SnapshotBrowser(QDialog):
         upgrade (current < snap). The boot-critical / kernel warnings only
         fire for downgrades; upgrading to a newer version is generally safer.
         """
+        if self._refuse_if_incomplete(snap_path):
+            return
         is_downgrade = pq.vercmp(current, snap_version) > 0
         verb = "Downgrade" if is_downgrade else "Upgrade"
         verb_past = "downgraded" if is_downgrade else "upgraded"
@@ -633,6 +671,8 @@ class SnapshotBrowser(QDialog):
         snap_path = self._current_snapshot_path()
         if snap_path is None:
             return
+        if self._refuse_if_incomplete(snap_path):
+            return
         configs = list_snapshot_configs(snap_path)
         if not configs:
             QMessageBox.information(
@@ -672,6 +712,8 @@ class SnapshotBrowser(QDialog):
     def _on_bulk_apply_packages(self) -> None:
         snap_path = self._current_snapshot_path()
         if snap_path is None:
+            return
+        if self._refuse_if_incomplete(snap_path):
             return
 
         changes, skipped = plan_bulk_package_apply(

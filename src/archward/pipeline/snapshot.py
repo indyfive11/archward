@@ -398,6 +398,67 @@ def latest_snapshot(snapshot_dir: Path) -> tuple[Path, int] | None:
     return latest, age
 
 
+# ── Completeness validation (v0.4.4 F4) ────────────────────────────────────
+
+
+def validate_snapshot(path: Path) -> list[str]:
+    """Return human-readable reasons the snapshot can't back a rollback.
+
+    Empty list ⇒ everything rollback/verify depend on is present.
+
+    `load_snapshot_from_disk` deliberately *tolerates* missing
+    per-section files (a snapshot still loads with an empty section).
+    That's right for loading but wrong for trusting: a snapshot whose
+    `packages/all.txt` or `configs/` is gone will fail cryptically
+    half-way through a restore, after pacman state has already been
+    touched. This is the up-front gate so the CLI/GUI refuse with a
+    clear message *before* acting.
+
+    "Complete enough to roll back" =
+      - `.timestamp` present and a valid epoch
+      - `packages/all.txt` present and non-empty (the package baseline)
+      - `configs/` directory present (pre-update config copies)
+
+    `packages/critical.txt` is deliberately NOT required: the rollback
+    path reconstructs the critical/kernel set from `all.txt` + the
+    configured kernel patterns when it's absent
+    (`critical_packages_with_kernel_fallback`), so pre-v0.2.0 snapshots
+    that predate critical.txt are still usable — refusing them here
+    would be a false "incomplete".
+    """
+    problems: list[str] = []
+
+    ts = path / ".timestamp"
+    if not ts.exists():
+        problems.append(
+            ".timestamp marker missing — not a completed snapshot"
+        )
+    else:
+        try:
+            int(ts.read_text().strip())
+        except (OSError, ValueError):
+            problems.append(".timestamp is unreadable or not an epoch")
+
+    all_txt = path / "packages" / "all.txt"
+    try:
+        if not all_txt.is_file() or not all_txt.read_text(
+            encoding="utf-8", errors="replace"
+        ).strip():
+            problems.append(
+                "packages/all.txt missing or empty — no package baseline "
+                "to roll back to"
+            )
+    except OSError:
+        problems.append("packages/all.txt unreadable")
+
+    if not (path / "configs").is_dir():
+        problems.append(
+            "configs/ missing — no pre-update config copies to restore"
+        )
+
+    return problems
+
+
 # ── On-disk reconstruction (v0.4.3) ────────────────────────────────────────
 
 

@@ -10,6 +10,7 @@ from archward.models.config import ConfigModel
 from archward.models.gate import GateResult, GateStatus
 from archward.models.snapshot import Snapshot
 from archward.pacman.runner import check_pacman_db_lock
+from archward.system import cache_policy as cp
 from archward.system import disk
 
 log = logging.getLogger(__name__)
@@ -18,8 +19,11 @@ PHASE_PREFLIGHT = "preflight"
 PHASE_GATES = "gates"
 
 
-def preflight_checks(bus: EventBus) -> list[GateResult]:
-    """Pre-flight: pacman db.lck. (Single-instance lock is handled in app.py.)"""
+def preflight_checks(cfg: ConfigModel, bus: EventBus) -> list[GateResult]:
+    """Pre-flight: pacman db.lck + rollback-cache safety.
+
+    (Single-instance lock is handled in app.py.)
+    """
     bus.emit_start(PHASE_PREFLIGHT, "Pre-flight checks")
     results: list[GateResult] = []
 
@@ -64,6 +68,52 @@ def preflight_checks(bus: EventBus) -> list[GateResult]:
                 message="pacman db is unlocked",
             )
         )
+
+    # Rollback-cache safety (v0.4.4 F2). archward's whole promise is a
+    # recoverable update; that rests on the pre-update .pkg.tar.* still
+    # being in the pacman cache. A post-transaction cleaning hook runs
+    # *inside* the very `pacman -Syu` we're about to start and deletes
+    # exactly those files. Surface it BEFORE we touch the system. It's a
+    # WARN, not a FAIL — a user may legitimately not care about rollback
+    # for a given run — but overridable so an interactive run can bail.
+    try:
+        policy = cp.detect_cache_policy()
+    except Exception as e:  # noqa: BLE001 — detection must never block the run
+        log.warning("cache-policy detection failed: %s", e)
+        policy = None
+    if policy is not None:
+        if policy.cleaning_hooks or policy.safety is cp.RollbackSafety.DANGEROUS:
+            hook_names = ", ".join(h.name for h in policy.cleaning_hooks)
+            msg = (
+                f"a cache-cleaning pacman hook ({hook_names}) will run "
+                "during this update and delete the packages archward needs "
+                "for rollback"
+                if policy.cleaning_hooks
+                else f"cache policy is {policy.safety.value} — rollback for "
+                "this update may not work"
+            )
+            bus.emit_log(PHASE_PREFLIGHT, f"WARN cache-safety: {msg}")
+            results.append(
+                GateResult(
+                    name="cache-safety",
+                    status=GateStatus.WARN,
+                    message=msg,
+                    detail=policy.explanation,
+                    can_override=cfg.gates.allow_override,
+                )
+            )
+        else:
+            bus.emit_log(
+                PHASE_PREFLIGHT,
+                f"PASS cache-safety: rollback policy {policy.safety.value}",
+            )
+            results.append(
+                GateResult(
+                    name="cache-safety",
+                    status=GateStatus.PASS,
+                    message=f"rollback cache policy: {policy.safety.value}",
+                )
+            )
 
     bus.emit_result(
         PHASE_PREFLIGHT,

@@ -124,7 +124,7 @@ def run_pipeline(
         prompter = _default_prompter(mode, auto_yes)
 
     # ── Pre-flight ──────────────────────────────────────────────────────────
-    preflight = gates_phase.preflight_checks(bus)
+    preflight = gates_phase.preflight_checks(cfg, bus)
     if gates_phase.any_fail(preflight):
         result.preflight_failed = True
         result.aborted_reason = "pre-flight failed"
@@ -137,6 +137,32 @@ def run_pipeline(
             was_dry_run=(mode is Mode.DRY_RUN),
         )
         return result
+
+    # A pre-flight WARN (cache-safety, v0.4.4 F2) never hard-aborts, but
+    # in an interactive run we give the user an explicit chance to bail
+    # before we touch the system — rollback for THIS update may not work.
+    # In auto/dry-run we don't prompt (AutoNoPrompter would spuriously
+    # abort a WARN); it was already logged loudly.
+    if mode is Mode.INTERACTIVE:
+        warn = next(
+            (
+                g
+                for g in preflight
+                if g.status is GateStatus.WARN and g.can_override
+            ),
+            None,
+        )
+        if warn is not None and not prompter.confirm_gate_override(warn):
+            result.aborted_reason = f"{warn.name}: {warn.message}"
+            result.summary = derive_result(
+                preflight_failed=True,
+                update_exit_code=None,
+                pending=[],
+                verify=None,
+                pacnew_count=0,
+                was_dry_run=(mode is Mode.DRY_RUN),
+            )
+            return result
 
     # ── Snapshot ────────────────────────────────────────────────────────────
     snapshot = snapshot_phase.take_snapshot(cfg, strategy, bus)

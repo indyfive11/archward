@@ -253,6 +253,40 @@ HELP: dict[tuple[str, str], str] = {
         "built-in checks will continue without it."
     ),
 
+    # ── Cache (v0.4.4) ────────────────────────────────────────────────────
+    ("cache", "_section"): (
+        "archward's rollback works by reinstalling the OLD package from "
+        "/var/cache/pacman/pkg/. Your pacman cache policy decides whether "
+        "that old package still exists when you need it. This tab shows "
+        "the live policy + a rollback-safety verdict, and applies "
+        "environment presets (Home / Workstation / Server / "
+        "Mission-critical). A post-transaction cleaning hook is the "
+        "dangerous case — it deletes the rollback substrate inside the "
+        "same update archward runs."
+    ),
+
+    # ── Verify remediation hints (continued) ──────────────────────────────
+    ("verify_hint", "boot_integrity"): (
+        "An initramfs is older than its kernel — the mkinitcpio/dracut "
+        "pacman hook didn't run or failed, so the running kernel and its "
+        "initramfs are out of sync and the system may not boot. "
+        "Regenerate it BEFORE rebooting: `sudo mkinitcpio -P` (mkinitcpio) "
+        "or `sudo dracut-rebuild` / `sudo dracut --regenerate-all -f` "
+        "(dracut). If you also just installed a brand-new kernel flavour, "
+        "refresh the boot menu too: `sudo grub-mkconfig -o "
+        "/boot/grub/grub.cfg` (GRUB) or `sudo bootctl update` "
+        "(systemd-boot) — a routine same-flavour kernel update does NOT "
+        "need this."
+    ),
+    ("verify_hint", "rollback_cache"): (
+        "Pre-update versions of the packages just updated are no longer in "
+        "/var/cache/pacman/pkg/ — a cache-cleaning hook or aggressive "
+        "paccache policy deleted them. archward can't roll these back. "
+        "Pull the old version from https://archive.archlinux.org/ and "
+        "`sudo pacman -U` it, or adjust the policy in Preferences → Cache "
+        "so this doesn't happen next time."
+    ),
+
     # ── Profiles ──────────────────────────────────────────────────────────
     ("profiles", "_section"): (
         "Profiles are named alternate config files at "

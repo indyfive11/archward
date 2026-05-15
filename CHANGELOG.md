@@ -6,6 +6,148 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-05-15
+
+**Rollback-substrate awareness + production-reliability plugs.**
+archward's headline promise — "a bad update is always recoverable" —
+rests entirely on the pre-update `.pkg.tar.*` still living in
+`/var/cache/pacman/pkg/`. Until now archward never inspected the cache
+policy that governs whether it survives. A user could run archward for
+months, fully believing they were protected, while a post-transaction
+`paccache` hook silently deleted the rollback substrate *inside the
+very `pacman -Syu` archward runs*. This release closes that hole and
+three adjacent ones the production-reliability audit surfaced.
+
+### Added
+
+- **Cache-policy awareness + GUI control (Preferences → Cache, the
+  13th tab).** New `archward.system.cache_policy` module detects the
+  live policy: `paccache.timer` state, `PACCACHE_ARGS`, pacman
+  `CleanMethod`, dangerous post-transaction cleaning hooks, and cache
+  size/count. It computes a rollback-safety verdict —
+  DANGEROUS / TIGHT / BALANCED / GENEROUS / UNMANAGED — and shows it
+  as a colour-coded banner. Four one-click environment presets (Home
+  `-rk3`, Workstation `-rk5 -ruk2`, Server `-rk10`, Mission-critical
+  `-rk15` no-timer) apply behind a **preview-then-confirm sudo dialog**
+  that shows the exact `tee /etc/conf.d/pacman-contrib` +
+  `systemctl …  paccache.timer` commands before running them, through
+  the same allowlisted `run_capture`/`SudoStrategy` path as rollback.
+  A custom keep-N spinbox covers the in-between cases. archward
+  *detects and warns* about package/third-party cleaning hooks; it
+  never silently mutates someone else's hook.
+
+- **Pre-flight cache-orphaning guard (F2).** Before the snapshot is
+  even taken, pre-flight runs the cache assessment. A cleaning hook or
+  a DANGEROUS verdict raises an overridable WARN — an interactive run
+  gets an explicit "rollback for this update may not work, proceed?"
+  prompt; auto/dry-run log it loudly and continue.
+
+- **Post-update `rollback-cache` verify check (F2).** After the
+  update, archward compares the snapshot's package versions against
+  what's installed and checks the pacman cache for every changed
+  package's *old* file. If a hook ate them, this is a verify **FAIL**
+  (archward's job is the *recoverable* update — that did not hold),
+  with the v0.4.0 "What to do?" button pointing at
+  archive.archlinux.org. Honours pacman.conf `CacheDir` (relocated /
+  multiple caches are scanned, not just the default), and SKIPs (never
+  FALSE-FAILs) if the cache can't be read / the scan times out.
+
+- **`boot-integrity` verify check (F3).** The classic silent killer:
+  a kernel upgraded but the mkinitcpio/dracut pacman hook didn't
+  regenerate the initramfs. pacman exits 0, verify is otherwise green,
+  and the box fails to boot — exactly when the user can least fix it.
+  archward FAILs on exactly one unambiguous signal: an
+  `initramfs-<flavour>.img` older than its `vmlinuz-<flavour>` (with
+  stable kernel filenames the two MUST move in lockstep). It does NOT
+  check grub.cfg mtime — with stable filenames grub.cfg references a
+  fixed path and legitimately predates the kernel by months on a
+  perfectly bootable system, so a mtime check there is a guaranteed
+  false positive. Every indeterminate case SKIPs — no flavour-named
+  initramfs (dracut-kver / exotic), a Unified Kernel Image present
+  (the standalone initramfs isn't authoritative then), or `/boot`
+  absent. A false FAIL on a working exotic setup is worse than a
+  missed check. "What to do?" surfaces the mkinitcpio *and* dracut
+  regen commands.
+
+- **Snapshot-completeness validation before rollback/verify (F4).**
+  New `snapshot.validate_snapshot()`. `load_snapshot_from_disk`
+  deliberately tolerates missing sections (right for *loading*) — but
+  a snapshot whose `packages/all.txt` or `configs/` is gone would
+  fail cryptically half-way through a restore, after pacman state was
+  already touched. The CLI (`archward verify` / `archward rollback …`,
+  exit 3) and the GUI Snapshot Browser (refusal dialog + a red
+  "Incomplete" banner in the detail panel) now refuse up front with
+  the specific missing section named. The hard-required set is
+  `.timestamp` + non-empty `packages/all.txt` + `configs/`;
+  `critical.txt` is intentionally **not** required (the rollback path
+  reconstructs it from `all.txt` + kernel patterns, so pre-v0.2.0
+  snapshots that predate critical.txt stay usable).
+
+### Changed
+
+- `gates.preflight_checks()` now takes `cfg` (for `allow_override`)
+  in addition to the bus.
+- `pacman.runner.run_capture()` grew an optional `input_text=` kwarg
+  (feeds stdin) so the Cache tab can write `/etc/conf.d/pacman-contrib`
+  via the allowlisted `sudo tee`. Backward compatible — every
+  pre-0.4.4 caller passes nothing and behaves identically.
+
+### Documentation
+
+- **`docs/recovery.md`** — new "Cache policy: is rollback even
+  possible?" section (the Cache tab, the verdicts, the
+  archive.archlinux.org fallback when the substrate is already gone).
+- **`docs/cli.md`** — notes the new pre-flight WARN, the
+  `rollback-cache` / `boot-integrity` verify rows, and the exit-3
+  incomplete-snapshot refusal.
+- **`man/archward.1`** — documents the two new universal verify checks
+  and the cache-safety pre-flight gate.
+- **README** — Preferences tab list updated to 13 (Cache); GUI
+  walkthrough mentions the rollback-safety verdict + presets.
+
+### Hardening pass (config-variety audit)
+
+A deliberate second pass after a live-box mis-fire (boot-integrity
+FAILed on a healthy machine because grub.cfg legitimately predated the
+kernel). Every v0.4.4 check was re-audited for the same
+"assumed-one-config-is-universal" class of bug across Arch's real
+spread of bootloaders, init systems, initramfs generators and pacman
+layouts. Fixes folded into the entries above:
+
+- `rollback-cache` reads pacman.conf `CacheDir` (relocated / multiple
+  caches) instead of the hard-coded default, and SKIPs instead of
+  mass-FALSE-FAILing when the cache can't be scanned.
+- `boot-integrity` dropped the grub.cfg-mtime heuristic entirely and
+  now SKIPs when a UKI is present.
+- Cache verdict no longer calls `CleanMethod = KeepInstalled
+  KeepCurrent` (both set — safe) DANGEROUS; only `KeepCurrent` without
+  `KeepInstalled` is.
+- `validate_snapshot` no longer hard-requires `critical.txt` (legacy
+  snapshots stay usable).
+
+### Tests
+
+395 → **477** (+82). New files:
+- `test_cache_policy.py` — 49 tests (keep-N parse matrix, timer-state
+  branches, PACCACHE_ARGS/CleanMethod/`CacheDir` parse, the
+  KeepInstalled+KeepCurrent safe-combo edge, dangerous-hook detection
+  incl. the glib-compile-schemas false-positive regression, cache
+  stats, the full verdict matrix, every preset's command set).
+- `test_cache_tab.py` — 5 tests (verdict render, dangerous-hook
+  warning, preview-then-confirm apply path with `tee`+`input_text`,
+  abort-on-No, mission-critical timer-disable).
+- `test_cache_safety_verify.py` — 10 tests (skip-no-list, nothing
+  changed, old file present/missing, hook vs prune cause, epoch
+  prefix, relocated + multiple `CacheDir`, scan-failure SKIP).
+- `test_boot_integrity.py` — 9 tests (no /boot, no kernel, fresh vs
+  stale initramfs, no-matching-initramfs skip, UKI-present skip,
+  multi-kernel one-stale, plus the live-box regression: ancient
+  grub.cfg + fresh initramfs must PASS).
+- `test_snapshot_validate.py` — 11 tests (complete, every missing
+  section, critical.txt-absent stays valid, multi-problem, CLI
+  rollback exit-3 refusal + resolver).
+- `test_gates_preflight.py` extended for the cache-safety WARN.
+
 ## [0.4.3] — 2026-05-15
 
 **CLI parity with the GUI Snapshot Browser** plus a post-reboot verify

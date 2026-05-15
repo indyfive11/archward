@@ -1,14 +1,14 @@
 # CLAUDE.md — archward project context
 
-You've been launched in `~/dev/archward/`, a **shipped and maintained** Python/PySide6 project. v0.4.3 just shipped (2026-05-15) — the package is live on the AUR as `archward`. This file gives you the operational context for further maintenance / bug fixes / v0.5+ work.
+You've been launched in `~/dev/archward/`, a **shipped and maintained** Python/PySide6 project. v0.4.4 just shipped (2026-05-15) — the package is live on the AUR as `archward`. This file gives you the operational context for further maintenance / bug fixes / v0.5+ work.
 
 **Read first if you're new to the project:** [`CHANGELOG.md`](./CHANGELOG.md) for what's shipped, [`README.md`](./README.md) for user-facing surface, [`PLAN.md`](./PLAN.md) for historical design rationale (v1 is shipped — PLAN is reference, not a TODO).
 
 ## What is archward?
 
-A safe-update GUI for Arch-based Linux distributions (Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix). Pipeline order (as of v0.4.0):
+A safe-update GUI for Arch-based Linux distributions (Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix). Pipeline order (as of v0.4.4):
 
-1. Pre-flight (`db.lck` + single-instance lock)
+1. Pre-flight (`db.lck` + single-instance lock + cache-safety WARN, v0.4.4 F2)
 2. Snapshot (packages, configs, services, network state, pacnew baseline)
 3. Gates (snapshot freshness, disk)
 4. Risk classification (HIGH/MEDIUM/LOW + transaction preview)
@@ -16,7 +16,7 @@ A safe-update GUI for Arch-based Linux distributions (Arch, EndeavourOS, Manjaro
 6. Official update (`sudo pacman -Syu`)
 7. AUR phase (auto-detected helper)
 8. Pacnew resolution
-9. Verify (universal + opt-in services + `[hooks]` + plugin probes)
+9. Verify (universal incl. `rollback-cache` + `boot-integrity` (v0.4.4) + opt-in services + `[hooks]` + plugin probes)
 10. Post-verify hooks (`[hooks].post_verify`)
 11. Report (RESULT tag + desktop notification)
 
@@ -72,6 +72,9 @@ Per PLAN.md §11. Every originally-reserved v2 seam plus every post-release poli
 - **Verify failure remediation hints (v0.4.0)** — Verify view's 4th column shows a "What to do?" button on FAIL rows with a registered hint. Hints live in `help_text.HELP` under the `verify_hint` section.
 - **Snapshot retention (v0.4.0)** — the `keep_snapshots` setting (GUI-exposed but no-op since v0.1.0) now actually runs at end-of-pipeline. Snapshot browser also gets a "Prune now…" button. Logic in `archward/pipeline/retention.py`.
 - **Preferences inline help (v0.1.2 + ongoing)** — every schema tab has italic help labels under each field, with `_section_help()` intros on the more involved tabs.
+- **CLI subcommands + recovery docs (v0.4.3)** — `archward.cli_subcommands` package (Qt-free): `verify`, `snapshot {list,show,prune}`, `rollback {config,package,all-configs,all-packages}`, `pacnew {list,diff,apply}`. `snapshot.load_snapshot_from_disk()` is the single snapshot-reconstruction source for CLI + GUI. `docs/recovery.md`, `docs/cli.md`, `man/archward.1` (installed by the AUR package).
+- **Cache-policy awareness (v0.4.4)** — `archward.system.cache_policy` (pure-Python, Qt-free): detects paccache timer/args, pacman `CleanMethod`, dangerous post-transaction cleaning hooks, cache size; computes a `RollbackSafety` verdict (DANGEROUS/TIGHT/BALANCED/GENEROUS/UNMANAGED) + 4 environment presets. GUI is the 13th Preferences tab `_CacheTab` — verdict banner + preview-then-confirm sudo apply via the allowlisted `tee`/`systemctl` path (`run_capture` grew an `input_text=` kwarg for the `sudo tee`). The rollback substrate every downgrade depends on, finally inspected.
+- **Production-reliability plugs (v0.4.4)** — F2: `gates.preflight_checks(cfg,bus)` raises an overridable cache-safety WARN; `verify_phase._cache_safety_check` is a `rollback-cache` universal FAIL when a hook/prune ate the just-updated packages' pre-update files (honours pacman.conf `CacheDir` incl. relocated/multiple; SKIPs not FAILs if the cache can't be scanned). F3: `verify_phase._boot_integrity_check` (`boot-integrity`) FAILs ONLY on initramfs-older-than-its-kernel (deliberately does NOT check grub.cfg mtime — stable kernel filenames mean grub.cfg legitimately predates the kernel; that heuristic was a guaranteed false positive, removed after a live-box mis-fire), SKIPs when no flavour-named initramfs / UKI present / no /boot. F4: `snapshot.validate_snapshot()` — CLI (exit 3) + GUI Snapshot Browser refuse an incomplete snapshot up front, naming the missing section; hard set is `.timestamp` + non-empty `all.txt` + `configs/` (NOT `critical.txt` — reconstructable, legacy snapshots stay usable). Verify-hint keys `rollback_cache` + `boot_integrity` wire the v0.4.0 "What to do?" button.
 
 ## Implementation history (PLAN.md §13 — completed)
 
@@ -128,7 +131,7 @@ Rob has an extensive memory system at `/home/rob/.claude/projects/-home-rob/memo
 
 ## AUR package — release workflow
 
-archward ships as `archward` on the AUR (live since v0.3.2, currently at v0.4.3 as of 2026-05-15).
+archward ships as `archward` on the AUR (live since v0.3.2, currently at v0.4.4 as of 2026-05-15).
 **Page:** https://aur.archlinux.org/packages/archward
 **Maintainer:** `indyfive11`
 **Installable:** `yay -S archward`

@@ -44,6 +44,17 @@ PLUGIN_TIMEOUT_S = 30
 # mount; this caps that wait at a few seconds.
 REBOOT_LOG_STAT_TIMEOUT_S = 3
 
+# Cache-dir scan timeout for the rollback-cache check (v0.4.4 F2).
+# /var/cache/pacman/pkg is normally local, but it can be a bind/overlay
+# mount; cap the iterdir() the same way the reboot-log probe is capped.
+CACHE_SCAN_TIMEOUT_S = 5
+
+# Boot-fs probe timeout for the boot-integrity check (v0.4.4 F3).
+# /boot (or the ESP) may be a slow/unmounted/auto-mounted FAT volume;
+# cap the stat()/glob() walk so verify never hangs on it.
+BOOT_PROBE_TIMEOUT_S = 5
+_BOOT_DIR = Path("/boot")
+
 log = logging.getLogger(__name__)
 
 PHASE = "verify"
@@ -140,6 +151,265 @@ def _pacnew_check(cfg: ConfigModel, snapshot_path: Path) -> VerifyCheck:
         status=CheckStatus.WARN,
         message=f"{len(new)} new .pacnew file(s) need merging",
         detail="\n".join(str(p) for p in new),
+    )
+
+
+def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
+    """Did this update's rollback substrate survive the transaction?
+
+    archward's headline promise is a recoverable update: if it goes
+    bad, downgrade the offending package from the cached old
+    `.pkg.tar.*`. A post-transaction cleaning hook (paccache / pacman
+    -Sc) runs *inside* the same `pacman -Syu` archward just ran, so it
+    can delete exactly the pre-update files the downgrade path needs.
+
+    We compare the snapshot's recorded package versions against what's
+    installed now and, for everything that changed, check the pacman
+    cache for the *old* file. If the pre-update files are gone, the
+    safety net failed for this run — that is a verification FAIL (the
+    update may have installed fine, but archward's job is the safe,
+    recoverable update, and that did not hold). The v0.4.0 "What to
+    do?" button surfaces the archive.archlinux.org remediation.
+    """
+    from archward.system import cache_policy as cp
+
+    all_txt = snapshot_path / "packages" / "all.txt"
+    try:
+        snap_lines = all_txt.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except OSError:
+        # No snapshot package list to compare against — don't manufacture
+        # a false positive; this isn't the check's failure mode.
+        return VerifyCheck(
+            bucket="universal",
+            name="rollback-cache",
+            status=CheckStatus.PASS,
+            message="no snapshot package list to compare (skipped)",
+        )
+
+    snap_versions: dict[str, str] = {}
+    for line in snap_lines:
+        parts = line.split()
+        if len(parts) == 2:
+            snap_versions[parts[0]] = parts[1]
+
+    current = dict(pq.list_all())
+    updated = [
+        (n, ov)
+        for n, ov in snap_versions.items()
+        if n in current and current[n] != ov
+    ]
+    if not updated:
+        return VerifyCheck(
+            bucket="universal",
+            name="rollback-cache",
+            status=CheckStatus.PASS,
+            message="no package versions changed since snapshot",
+        )
+
+    # Honour pacman.conf CacheDir (it can be relocated / multiple) —
+    # scanning only the hard-coded default would report every package
+    # as un-rollbackable on a moved cache.
+    cache_dirs = cp.read_cache_dirs()
+
+    def _scan() -> set[str]:
+        names: set[str] = set()
+        for d in cache_dirs:
+            try:
+                names.update(p.name for p in d.iterdir() if p.is_file())
+            except OSError:
+                continue
+        return names
+
+    try:
+        cache_names = _call_with_timeout(_scan, CACHE_SCAN_TIMEOUT_S)
+    except (TimeoutError, OSError) as e:
+        # Couldn't read the cache → we can't prove rollback is gone.
+        # A false FAIL here is worse than a missed check (same stance
+        # as boot-integrity): SKIP, don't FAIL.
+        log.warning("rollback-cache: cache scan failed (%s) — skipping", e)
+        return VerifyCheck(
+            bucket="universal",
+            name="rollback-cache",
+            status=CheckStatus.PASS,
+            message=(
+                "cache scan failed/timed out — rollback-cache skipped "
+                f"(checked: {', '.join(str(d) for d in cache_dirs)})"
+            ),
+        )
+
+    # The pacman cache filename embeds the full version (epoch:pkgver-rel)
+    # exactly as `pacman -Q` prints it, e.g. `foo-2:1.2.3-4-x86_64.pkg.tar.zst`.
+    # `{name}-{version}-` is therefore a safe prefix for both epoch and
+    # non-epoch packages.
+    missing = [
+        f"{n} {ov}"
+        for n, ov in updated
+        if not any(fn.startswith(f"{n}-{ov}-") for fn in cache_names)
+    ]
+    if not missing:
+        return VerifyCheck(
+            bucket="universal",
+            name="rollback-cache",
+            status=CheckStatus.PASS,
+            message=(
+                f"pre-update package(s) still cached for all "
+                f"{len(updated)} updated package(s) — rollback available"
+            ),
+        )
+
+    hooks = cp.scan_cleaning_hooks()
+    cause = (
+        f"A cache-cleaning pacman hook ({', '.join(h.name for h in hooks)}) "
+        "ran during this update — that is what removed them. Remove the "
+        "hook so future updates stay recoverable."
+        if hooks
+        else "The pacman cache no longer holds these versions (paccache, a "
+        "manual pacman -Sc, or a low keep-count pruned them)."
+    )
+    shown = ", ".join(missing[:20]) + (" …" if len(missing) > 20 else "")
+    return VerifyCheck(
+        bucket="universal",
+        name="rollback-cache",
+        status=CheckStatus.FAIL,
+        message=(
+            f"rollback unavailable for {len(missing)} of {len(updated)} "
+            "just-updated package(s) — pre-update version gone from cache"
+        ),
+        detail=(
+            "archward's downgrade path needs the old .pkg.tar.* in "
+            f"{', '.join(str(d) for d in cache_dirs)}. {cause} "
+            f"Affected: {shown}"
+        ),
+    )
+
+
+def _boot_integrity_check(boot_dir: Path = _BOOT_DIR) -> VerifyCheck:
+    """Will the machine actually boot after this update?
+
+    The classic silent killer: a kernel package upgraded but the
+    initramfs generator (mkinitcpio or dracut) didn't regenerate the
+    initramfs — its pacman hook failed or was removed. pacman exits 0,
+    verify is otherwise green, and the box fails to boot on the next
+    reboot, exactly when the user is least able to fix it.
+
+    We FAIL on exactly one unambiguous signal: an
+    `initramfs-<flavour>.img` that is OLDER than its
+    `vmlinuz-<flavour>`. With stable kernel image filenames (the Arch
+    default) the initramfs MUST be rewritten in lockstep with the
+    kernel, so older-than is a hard contradiction.
+
+    We deliberately do NOT check grub.cfg mtime. With stable kernel
+    filenames `grub.cfg` references a fixed path (`/boot/vmlinuz-linux`)
+    and is NOT regenerated on a routine kernel update — it legitimately
+    predates the kernel by months on a perfectly bootable system.
+    There is no cheap, false-positive-free bootloader-staleness signal,
+    so we don't invent one.
+
+    Every indeterminate case (no matching initramfs → dracut-with-kver
+    naming / UKI / exotic, /boot absent or unmounted) is SKIPPED as a
+    PASS-with-note — a false FAIL on a working setup is worse than a
+    missed check. The v0.4.0 "What to do?" button surfaces the regen
+    commands.
+    """
+    name = "boot-integrity"
+
+    def _probe() -> tuple[str, str, str | None]:
+        if not boot_dir.is_dir():
+            return ("pass", f"{boot_dir} not present — boot-integrity skipped", None)
+
+        # Unified Kernel Image setups bundle the initramfs inside the
+        # .efi. A standalone initramfs-<flavour>.img may still be lying
+        # around (leftover / dual) and could be stale while the box
+        # boots fine from the UKI — checking the standalone would be a
+        # false FAIL. If any UKI exists, the standalone images are not
+        # authoritative: skip the whole check.
+        for ud in (
+            boot_dir / "EFI" / "Linux",
+            Path("/efi/EFI/Linux"),
+            Path("/boot/efi/EFI/Linux"),
+        ):
+            try:
+                if ud.is_dir() and any(ud.glob("*.efi")):
+                    return (
+                        "pass",
+                        "Unified Kernel Image present — boot-integrity "
+                        "skipped (standalone initramfs not authoritative)",
+                        None,
+                    )
+            except OSError:
+                continue
+
+        kernels = sorted(boot_dir.glob("vmlinuz-*"))
+        if not kernels:
+            return ("pass", "no vmlinuz-* kernel image — boot-integrity skipped", None)
+
+        problems: list[str] = []
+        assessed = 0
+        for k in kernels:
+            try:
+                kmt = k.stat().st_mtime
+            except OSError:
+                continue
+            flavour = k.name[len("vmlinuz-"):]
+            img = boot_dir / f"initramfs-{flavour}.img"
+            if not img.exists():
+                # No flavour-named initramfs for this kernel — likely
+                # dracut-with-kver naming / UKI / exotic. Can't
+                # conclude broken: skip it.
+                continue
+            assessed += 1
+            try:
+                imt = img.stat().st_mtime
+            except OSError:
+                continue
+            if kmt > imt:
+                problems.append(
+                    f"{k.name} is newer than {img.name} — initramfs not "
+                    "regenerated (the mkinitcpio/dracut pacman hook didn't "
+                    "run or failed)"
+                )
+
+        if problems:
+            head = problems[0]
+            extra = f" (+{len(problems) - 1} more)" if len(problems) > 1 else ""
+            return ("fail", f"boot may be broken — {head}{extra}", "\n".join(problems))
+        if assessed == 0:
+            return (
+                "pass",
+                "no flavour-named initramfs to assess (dracut/UKI?) — skipped",
+                None,
+            )
+        return (
+            "pass",
+            f"initramfs newer than kernel for {assessed} kernel(s)",
+            None,
+        )
+
+    try:
+        verdict, message, detail = _call_with_timeout(_probe, BOOT_PROBE_TIMEOUT_S)
+    except TimeoutError:
+        log.warning("boot-integrity probe timed out")
+        return VerifyCheck(
+            bucket="universal",
+            name=name,
+            status=CheckStatus.PASS,
+            message=f"{boot_dir} fs probe timed out — boot-integrity skipped",
+            detail="Check /boot is on a responsive filesystem.",
+        )
+    except Exception as e:  # noqa: BLE001 — probe must never crash verify
+        log.warning("boot-integrity probe error: %s", e)
+        return VerifyCheck(
+            bucket="universal",
+            name=name,
+            status=CheckStatus.PASS,
+            message="boot-integrity skipped (probe error)",
+        )
+
+    status = CheckStatus.FAIL if verdict == "fail" else CheckStatus.PASS
+    return VerifyCheck(
+        bucket="universal", name=name, status=status, message=message, detail=detail
     )
 
 
@@ -391,6 +661,8 @@ def run_verify(
 
     checks.append(_kernel_check())
     checks.append(_pacnew_check(cfg, snapshot_path))
+    checks.append(_cache_safety_check(snapshot_path))
+    checks.append(_boot_integrity_check())
     checks.append(_disk_check())
     checks.append(_pacman_log_check())
     reboot = _reboot_log_check(cfg, snapshot_path)

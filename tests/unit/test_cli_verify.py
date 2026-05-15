@@ -21,13 +21,22 @@ from archward.models.verify import CheckStatus, VerifyCheck, VerifyResult
 
 
 def _seed_snapshot(snap_dir: Path, snap_id: str = "2026-05-15_134116") -> Path:
-    """Drop a minimal valid snapshot fixture into snap_dir / snap_id."""
+    """Drop a minimal *complete* snapshot fixture into snap_dir / snap_id.
+
+    Complete per v0.4.4 F4 validate_snapshot(): .timestamp + non-empty
+    packages/all.txt + packages/critical.txt + configs/.
+    """
     p = snap_dir / snap_id
     p.mkdir(parents=True)
     (p / ".timestamp").write_text(f"{int(datetime.now().timestamp())}\n")
     (p / "system").mkdir()
     (p / "system" / "kernel-running.txt").write_text("6.13.4-arch1-1\n")
     (p / "system" / "os-release.txt").write_text("ID=endeavouros\n")
+    pkg = p / "packages"
+    pkg.mkdir()
+    (pkg / "all.txt").write_text("bash 5.2-1\nglibc 2.39-1\n")
+    (pkg / "critical.txt").write_text("=== Critical ===\nglibc: 2.39-1\n")
+    (p / "configs").mkdir()
     return p
 
 

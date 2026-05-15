@@ -366,18 +366,23 @@ The single-window GUI mirrors the CLI pipeline:
   confirmation. A pre-rollback snapshot is taken automatically so
   rollback-of-rollback works. **"Prune now…"** runs the retention pass
   on demand with a configurable keep-count.
-- **Preferences…** toolbar button — 12-tab dialog over the TOML schema
+- **Preferences…** toolbar button — 13-tab dialog over the TOML schema
   (General · Gates · Risk · Services · Pacnew · AUR · Pacman · Verify ·
-  Privilege · Hooks · Profiles · Advanced) with inline help text per
-  field. The **Pacnew** tab is a fully editable rule table (Pattern /
+  Privilege · Hooks · Cache · Profiles · Advanced) with inline help text
+  per field. The **Pacnew** tab is a fully editable rule table (Pattern /
   Strategy combo / Note) with Add / Remove / Restore defaults — no more
   hand-editing `config.toml`. The **Hooks** tab has an "Insert template…"
   combobox per editor with prebaked snippets (btrfs snapshot, stale-
-  backup gate, Discord webhook, restart user services). The **Profiles**
-  tab lists every profile (plus the default config), switches the
-  running window in-place, and supports new/rename/delete/diff vs
-  default/import/export. The **Advanced** tab has Re-detect (propose
-  diff), Reset to defaults, Open config in your editor.
+  backup gate, Discord webhook, restart user services). The **Cache** tab
+  shows a colour-coded rollback-safety verdict for the live pacman-cache
+  policy (paccache timer/args, CleanMethod, dangerous cleaning hooks) and
+  applies Home / Workstation / Server / Mission-critical presets behind a
+  preview-then-confirm sudo dialog — the substrate every rollback depends
+  on, made visible and tunable. The **Profiles** tab lists every profile
+  (plus the default config), switches the running window in-place, and
+  supports new/rename/delete/diff vs default/import/export. The
+  **Advanced** tab has Re-detect (propose diff), Reset to defaults, Open
+  config in your editor.
 - **About** toolbar button — small modal with the shield icon at 96 px,
   version, license, GitHub + AUR links.
 
@@ -403,9 +408,12 @@ risk classification (HIGH/MEDIUM/LOW with kernel-pattern matching and
 transaction preview), per-package deselect at HIGH-risk approval,
 official pacman update, AUR update via auto-detected helper, pacnew rule
 table with permission-preserving apply, verify (kernel match, .pacnew
-remaining, disk, pacman.log scan, opt-in `systemctl is-active` services),
-granular and bulk rollback (snapshot browser + per-file config restore +
-per-package downgrade from the local pacman cache), desktop notifications
+remaining, disk, pacman.log scan, rollback-cache survival, boot-integrity
+/ initramfs freshness, opt-in `systemctl is-active` services), pre-flight
+rollback-cache guard, granular and bulk rollback (snapshot browser +
+per-file config restore + per-package downgrade from the local pacman
+cache, with up-front snapshot-completeness validation), desktop
+notifications
 on completion, theme-aware GUI colors.
 
 **Machine-specific — wired via `[hooks]` in your config.** External

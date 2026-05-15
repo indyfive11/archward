@@ -63,11 +63,33 @@ archward verify [--snapshot ID]
 |---|---|
 | `--snapshot ID` | Verify against this snapshot. Default: the latest. |
 
-Runs every built-in check (kernel match, .pacnew remaining, disk,
-pacman.log scan, opt-in `systemctl is-active` services) **plus all
-discovered plugins** (the `archward.verify_checks` entry-point group —
-e.g. the bundled ZeroTier example). Output is the same check set the
-GUI's Verify view renders, in plain text.
+Runs every built-in check (kernel match, .pacnew remaining,
+**rollback-cache** survival, **boot-integrity** / initramfs freshness,
+disk, pacman.log scan, opt-in `systemctl is-active` services) **plus
+all discovered plugins** (the `archward.verify_checks` entry-point
+group — e.g. the bundled ZeroTier example). Output is the same check
+set the GUI's Verify view renders, in plain text.
+
+Two checks new in v0.4.4:
+
+- **`rollback-cache`** — FAILs if a cache-cleaning hook or aggressive
+  paccache policy deleted the pre-update `.pkg.tar.*` for a package
+  that just changed (archward's downgrade path needs it). The full
+  pipeline also raises an overridable **pre-flight** WARN for this
+  *before* the update runs.
+- **`boot-integrity`** — FAILs if an `initramfs-<flavour>.img` is
+  older than its `vmlinuz-<flavour>` (the mkinitcpio/dracut pacman
+  hook didn't run — the box may not boot). Does NOT check grub.cfg
+  mtime (with stable kernel filenames it legitimately predates the
+  kernel on a bootable system). SKIPs cleanly when there's no
+  flavour-named initramfs (dracut-kver / UKI) or no `/boot`.
+
+`archward verify` refuses an **incomplete snapshot** up front
+(exit 3) — missing `.timestamp`, empty `packages/all.txt`, or no
+`configs/` — naming the missing section instead of failing cryptically
+later. (`critical.txt` is *not* required: the rollback path
+reconstructs it from `all.txt` + kernel patterns, so older snapshots
+that predate it stay usable.)
 
 ### Exit codes
 
@@ -75,7 +97,7 @@ GUI's Verify view renders, in plain text.
 0  RESULT:SUCCESS / RESULT:PACNEW_MERGE_NEEDED / RESULT:NEEDS_REVIEW
 1  RESULT:VERIFY_FAILED   (one or more FAIL checks)
 2  RESULT:REBOOT_NEEDED
-3  snapshot not found or incomplete (missing .timestamp)
+3  snapshot not found, or incomplete (named missing section)
 ```
 
 ### Example
@@ -153,9 +175,15 @@ Without `--yes`, prints exactly which snapshots will be deleted
 
 ## `archward rollback`
 
-All four variants resolve the snapshot first (exit 3 if missing /
-incomplete) and build the sudo strategy. Each operation goes through
-the same pure-Python primitives the GUI Snapshot Browser uses.
+All four variants resolve the snapshot first and build the sudo
+strategy. Resolution exits 3 if the snapshot is missing, or if it's
+**incomplete** — missing `.timestamp`, empty `packages/all.txt`, or no
+`configs/` directory (`critical.txt` is reconstructable and not
+required). The specific missing section is printed; archward refuses
+*before* it touches pacman state, so you never get a half-applied
+restore from a
+bad snapshot. Each operation goes through the same pure-Python
+primitives the GUI Snapshot Browser uses.
 
 ### `archward rollback config <id> <filename>`
 

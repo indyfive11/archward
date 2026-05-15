@@ -19,7 +19,11 @@ from pathlib import Path
 from archward.app import build_config, build_sudo_strategy
 from archward.events import EventBus
 from archward.pipeline.report import derive_result
-from archward.pipeline.snapshot import latest_snapshot, load_snapshot_from_disk
+from archward.pipeline.snapshot import (
+    latest_snapshot,
+    load_snapshot_from_disk,
+    validate_snapshot,
+)
 from archward.pipeline.verify_phase import run_verify
 from archward.system import notify
 
@@ -53,6 +57,22 @@ def cmd_verify(args, config_path: Path | None) -> int:
             )
             return 3
         snap_path, _age = latest
+
+    # Refuse an incomplete snapshot up front (v0.4.4 F4) rather than
+    # producing partial/confusing verify output against a half-snapshot.
+    problems = validate_snapshot(snap_path)
+    if problems:
+        print(
+            f"archward verify: snapshot at {snap_path} is incomplete:",
+            file=sys.stderr,
+        )
+        for prob in problems:
+            print(f"  - {prob}", file=sys.stderr)
+        print(
+            "Pick another with `archward snapshot list`.",
+            file=sys.stderr,
+        )
+        return 3
 
     snapshot = load_snapshot_from_disk(snap_path)
     if snapshot is None:

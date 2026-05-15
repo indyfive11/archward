@@ -261,8 +261,15 @@ def run_capture(
     argv: list[str],
     *,
     strategy: SudoStrategy,
+    input_text: str | None = None,
 ) -> tuple[int, str, str]:
-    """Run a privileged command, capture stdout/stderr, return (code, out, err)."""
+    """Run a privileged command, capture stdout/stderr, return (code, out, err).
+
+    `input_text` (v0.4.4) is fed to the process's stdin. Used by the
+    Cache tab to write `/etc/conf.d/pacman-contrib` via the allowlisted
+    `sudo tee` (tee reads the new file content from stdin). When None
+    (every pre-v0.4.4 caller), behavior is unchanged.
+    """
     full = [*strategy.argv_prefix(), *argv]
     env = strategy.env()
     env["LANG"] = "C"
@@ -273,6 +280,7 @@ def run_capture(
             capture_output=True,
             text=True,
             env=env,
+            input=input_text,
         )
     except FileNotFoundError as e:
         return 127, "", str(e)

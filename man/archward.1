@@ -97,7 +97,28 @@ snapshot.
 .PP
 Runs every built-in check plus all discovered verify plugins (the
 .B archward.verify_checks
-entry-point group).
+entry-point group). Built-in checks include
+.B rollback\-cache
+(FAIL if a cache-cleaning hook or aggressive paccache policy deleted
+the pre-update package files archward's downgrade path needs) and
+.B boot\-integrity
+(FAIL if an initramfs is older than its kernel \(em the
+mkinitcpio/dracut pacman hook did not run and the machine may not
+boot; grub.cfg mtime is deliberately not checked, as it legitimately
+predates the kernel with stable kernel filenames; SKIPped when there
+is no flavour-named initramfs or no /boot). The full pipeline also raises an
+overridable pre-flight warning when the pacman-cache policy would make
+the upcoming update non-recoverable. An incomplete snapshot (missing
+.B .timestamp ,
+empty
+.B packages/all.txt ,
+or no
+.B configs/ )
+is refused up front with exit 3, naming the missing section.
+.B packages/critical.txt
+is not required \(em it is reconstructed from
+.B all.txt
+plus the kernel patterns, so snapshots that predate it stay usable.
 .SS archward snapshot list [\-\-limit N | \-\-all]
 Print a newest-first table of snapshots: id, age, distro, kernel,
 captured-config count. Default shows the 20 newest;

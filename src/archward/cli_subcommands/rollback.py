@@ -33,17 +33,36 @@ from archward.pipeline.rollback import (
     restore_all_configs,
     restore_config,
 )
-from archward.pipeline.snapshot import take_snapshot
+from archward.pipeline.snapshot import take_snapshot, validate_snapshot
 
 log = logging.getLogger(__name__)
 
 
 def _resolve_snapshot_path(cfg, snapshot_id: str) -> Path | None:
-    """Resolve snapshot_id → existing snapshot dir, or print error + return None."""
+    """Resolve snapshot_id → usable snapshot dir, or print error + return None.
+
+    Refuses an incomplete snapshot up front (v0.4.4 F4) so a missing
+    package list / configs dir surfaces here, not cryptically half-way
+    through a restore after pacman state has been touched.
+    """
     p = cfg.general.snapshot_dir / snapshot_id
-    if not p.is_dir() or not (p / ".timestamp").exists():
+    if not p.is_dir():
         print(
-            f"archward rollback: snapshot not found or incomplete: {p}",
+            f"archward rollback: snapshot not found: {p}",
+            file=sys.stderr,
+        )
+        return None
+    problems = validate_snapshot(p)
+    if problems:
+        print(
+            f"archward rollback: snapshot {snapshot_id} is incomplete and "
+            "cannot be used as a rollback source:",
+            file=sys.stderr,
+        )
+        for prob in problems:
+            print(f"  - {prob}", file=sys.stderr)
+        print(
+            "Pick another with `archward snapshot list`.",
             file=sys.stderr,
         )
         return None

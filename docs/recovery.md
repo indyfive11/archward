@@ -283,6 +283,40 @@ identify the right one.
 
 ---
 
+## Cache policy: is rollback even possible?
+
+Every rollback in this guide pulls the old `.pkg.tar.*` from
+`/var/cache/pacman/pkg/`. If that file isn't there, the downgrade
+can't happen — so it's worth knowing your cache policy *before* you
+need it.
+
+Open **Preferences → Cache**. The coloured banner is archward's
+rollback-safety verdict:
+
+- **BALANCED / GENEROUS** — you have rollback headroom. Nothing to do.
+- **TIGHT** — only ~1 prior version kept; a single bad update uses it
+  up. Consider a roomier preset.
+- **UNMANAGED** — the cache is never pruned. Rollback always works,
+  but the partition grows without bound — pick a preset to cap it.
+- **DANGEROUS** — *this is the one that bites.* Either a
+  post-transaction cleaning hook (it deletes the rollback substrate
+  *inside the same `pacman -Syu` archward runs*), or `keep ≤ 1`, or
+  `CleanMethod=KeepCurrent`. Rollback for fresh updates will fail.
+
+Pick the preset that matches the box — **Home**, **Workstation**,
+**Server**, or **Mission-critical** — and archward shows the exact
+`sudo` commands before applying them. archward never deletes a
+package-owned or third-party cleaning hook for you; if the verdict is
+DANGEROUS because of a hook, the Cache tab names the file so you can
+decide.
+
+The same check runs at **pre-flight** (an overridable warning before
+the update starts) and again in **verify** (a `rollback-cache` FAIL if
+the pre-update files for what just changed are already gone). If you
+see that FAIL, the next section is your fallback.
+
+---
+
 ## When the cached package is gone
 
 `/var/cache/pacman/pkg/` is pruned occasionally — by `paccache`,
