@@ -128,13 +128,78 @@ archward [flags]
   --version         Print version and exit.
 ```
 
+### Subcommands (v0.4.3+)
+
+The CLI exposes the full Snapshot-Browser capability surface, so a user
+stuck in tty1 after a broken update can recover without the GUI.
+
+**Full docs:** [`docs/recovery.md`](docs/recovery.md) is a
+task-oriented "my system broke — what do I type" walkthrough (start
+here if something's actually wrong). [`docs/cli.md`](docs/cli.md) is
+the exhaustive per-subcommand reference (every flag, exit code,
+side-effect). Both are installed to `/usr/share/doc/archward/` by the
+AUR package, and `man archward` covers the same ground.
+
+```
+archward verify [--snapshot ID]
+    Re-run the verify phase against the latest snapshot (or a specific
+    one). No new snapshot is taken; no update is performed. Catches
+    failures that only show up after reboot (DKMS modules, mkinitcpio
+    hooks, pacnew left unmerged, systemd unit changes).
+
+archward snapshot list [--limit N | --all]
+archward snapshot show <id>
+archward snapshot prune [--keep N] [--yes]
+    List, inspect, or prune snapshots. `show` dumps captured config
+    paths + critical-package versions — useful before running rollback.
+
+archward rollback config <id> <filename>
+archward rollback package <id> <pkg> [--confirm-boot-critical]
+archward rollback all-configs <id> [--yes]
+archward rollback all-packages <id> [--confirm-boot-critical]
+    Restore a single config / downgrade a single package / bulk-restore
+    every captured config / bulk-downgrade every drifted package.
+    Bulk variants auto-take a pre-rollback snapshot first. Boot-critical
+    packages (glibc, systemd, openssl, …) require BOTH the flag AND a
+    case-sensitive YES on stdin — `--yes` does NOT auto-confirm here.
+
+archward pacnew list
+archward pacnew diff <path>
+archward pacnew apply <path> --strategy=keep_ours|take_new|edit|leave
+    Manual .pacnew resolution. `path` accepts either the live /etc
+    path or the .pacnew sibling. `apply --strategy=edit` spawns
+    $VISUAL / $EDITOR on both files.
+```
+
 ### Exit codes
 
 ```
 0  SUCCESS / PACNEW_MERGE_NEEDED / NEEDS_REVIEW
-1  UPDATE_FAILED / VERIFY_FAILED
-2  REBOOT_NEEDED
+1  UPDATE_FAILED / VERIFY_FAILED / subcommand operation failed
+2  REBOOT_NEEDED / subcommand invalid args (e.g. boot-critical refusal)
+3  subcommand: snapshot not found
 ```
+
+### Post-reboot recovery
+
+After an update that requires a reboot, archward suggests:
+
+```
+After rebooting:
+  • archward verify      — confirm everything came back up cleanly
+
+If the desktop fails to load:
+  • Ctrl+Alt+F2, log in as your user
+  • archward snapshot list           # see rollback points
+  • archward verify                  # diagnose what broke
+  • archward rollback package <id> <pkg>   # targeted undo
+```
+
+The same breadcrumb prints to `archward.log` and shows up in the
+desktop notification (short form) so you don't have to remember it.
+For the full step-by-step (finding the right snapshot, identifying the
+responsible package, the no-cached-package fallback, rollback-of-
+rollback), see **[`docs/recovery.md`](docs/recovery.md)**.
 
 ## Configuration
 

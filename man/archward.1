@@ -1,0 +1,289 @@
+.\" archward(1) manual page
+.\" Keep in sync with docs/cli.md and docs/recovery.md.
+.TH ARCHWARD 1 "2026-05-15" "archward 0.4.3" "User Commands"
+.SH NAME
+archward \- safe-update pipeline and recovery toolset for Arch-based Linux
+.SH SYNOPSIS
+.B archward
+.RI [ flags ]
+.br
+.B archward
+.I command
+.RI [ "command options" ]
+.br
+.B archward-gui
+.RI [ \-\-profile
+.IR NAME ]
+.SH DESCRIPTION
+.B archward
+wraps
+.B pacman \-Syu
+(and an auto-detected AUR helper) in a snapshot \(-> gate \(-> classify
+\(-> update \(-> verify pipeline, so a bad update is always recoverable.
+.PP
+It has two invocation shapes. The
+.B flag form
+.RB ( "archward " [ flags ])
+runs the full update pipeline. The
+.B subcommands
+.RB ( "archward " \fIcommand\fR )
+expose the recovery toolset \(em verify, snapshot inspection, and
+rollback \(em so a user whose desktop will not start after an update
+can recover from a plain TTY without the GUI.
+.PP
+Every subcommand works from a non-graphical shell. This is deliberate:
+when a kernel or driver update breaks the desktop, recovery happens in
+.BR tty1 .
+.SH FLAG FORM OPTIONS
+.TP
+.B \-\-dry\-run
+Run snapshot, gates, and risk classification (including AUR pending),
+then exit. No update is performed.
+.TP
+.B \-\-auto
+Hands-off: abort the run if HIGH-RISK packages are present instead of
+prompting.
+.TP
+.B \-\-yes
+Auto-confirm HIGH-risk approval and recoverable gate overrides. Does
+.I not
+auto-confirm the boot-critical rollback gate \(em that is a separate,
+deliberate decision.
+.TP
+.B \-\-no\-aur
+Skip the AUR phase regardless of the
+.B aur.enabled
+config setting.
+.TP
+.BI \-\-profile " NAME"
+Use
+.IR ~/.config/archward/profiles/ NAME .toml
+instead of the default config.
+.I NAME
+must match
+.BR [A\-Za\-z0\-9][A\-Za\-z0\-9_\-]{0,63} .
+First run bootstraps the file with defaults. Applies to both the flag
+form and subcommands; place it before the subcommand.
+.TP
+.B \-\-detect
+Run distro / kernel / AUR-helper / service detection, propose a config
+diff, and exit.
+.TP
+.B \-\-write\-config
+Overwrite the config file with archward defaults and exit.
+.TP
+.B \-\-version
+Print version and exit.
+.TP
+.B \-\-help
+Print usage and exit.
+.PP
+.B \-\-dry\-run
+and
+.B \-\-auto
+are mutually exclusive.
+.SH SUBCOMMANDS
+.SS archward verify [\-\-snapshot ID]
+Re-run the verify phase against an existing snapshot. No new snapshot
+is taken and no update is performed. This is the post-reboot
+diagnostic \(em it catches failures that only manifest after the
+kernel actually boots: DKMS modules that did not rebuild, mkinitcpio
+hooks that did not fire, .pacnew files left unmerged, systemd unit
+syntax changes.
+.TP
+.BI \-\-snapshot " ID"
+Verify against this snapshot directory name. Default: the latest
+snapshot.
+.PP
+Runs every built-in check plus all discovered verify plugins (the
+.B archward.verify_checks
+entry-point group).
+.SS archward snapshot list [\-\-limit N | \-\-all]
+Print a newest-first table of snapshots: id, age, distro, kernel,
+captured-config count. Default shows the 20 newest;
+.B \-\-all
+shows every snapshot. Incomplete directories (no
+.B .timestamp
+marker) are filtered out.
+.SS archward snapshot show ID
+Full detail for one snapshot: meta block, captured config paths with
+sizes, and the critical-package list with versions. Use this to find
+the filename to pass to
+.B archward rollback config
+and to compare snapshot package versions against the installed set.
+.SS archward snapshot prune [\-\-keep N] [\-\-yes]
+Delete old snapshots, keeping the
+.I N
+newest (default:
+.BR cfg.general.keep_snapshots ).
+Without
+.BR \-\-yes ,
+lists the snapshots to be deleted and asks for confirmation.
+.SS archward rollback config ID FILENAME
+Restore one captured config to its live
+.I /etc
+location, preserving the live file's ownership and mode. A
+.B .pre\-rollback.bak
+of the live file is written first, so the operation is reversible.
+.I FILENAME
+accepts either the captured snapshot filename
+.RB ( mirrorlist )
+or the full live relpath
+.RB ( etc/pacman.d/mirrorlist ).
+.SS archward rollback package ID PKG [\-\-confirm\-boot\-critical]
+Downgrade or upgrade one package to its snapshot version, from
+.IR /var/cache/pacman/pkg/ .
+Boot-critical packages (glibc, systemd, openssl, and their lib32 /
+\-libs variants) require
+.B \-\-confirm\-boot\-critical
+.I and
+a case-sensitive
+.B YES
+typed on stdin. archward never fetches from the network; if the
+cached version is gone, see the
+.B EXAMPLES
+section.
+.SS archward rollback all\-configs ID [\-\-yes]
+Restore every captured config in one pass. Auto-takes a pre-rollback
+snapshot first so the bulk operation is itself reversible. Per-file
+failures are reported but do not abort the rest.
+.SS archward rollback all\-packages ID [\-\-confirm\-boot\-critical]
+Single atomic
+.B pacman \-U
+over every package whose snapshot version differs from current.
+Auto-takes a pre-rollback snapshot first. Prints the full plan before
+acting. Boot-critical packages in the plan require
+.B \-\-confirm\-boot\-critical
+and a stdin
+.BR YES .
+.SS archward pacnew list
+Scan
+.I /etc
+for
+.B .pacnew
+files and print each with its rule-classified strategy and note.
+.SS archward pacnew diff PATH
+Unified diff of the live config versus its
+.BR .pacnew .
+.I PATH
+accepts either form.
+.SS archward pacnew apply PATH \-\-strategy=STRATEGY
+Apply a resolution.
+.I STRATEGY
+is one of:
+.BR keep_ours
+(discard the .pacnew),
+.BR take_new
+(replace the live file, preserving ownership + mode),
+.BR edit
+(open both in
+.BR $VISUAL / $EDITOR ),
+or
+.BR leave
+(no-op).
+.SH EXIT STATUS
+.SS Flag form
+.TP
+.B 0
+RESULT:SUCCESS / RESULT:PACNEW_MERGE_NEEDED / RESULT:NEEDS_REVIEW
+.TP
+.B 1
+RESULT:UPDATE_FAILED / RESULT:VERIFY_FAILED
+.TP
+.B 2
+RESULT:REBOOT_NEEDED (informational; user must reboot)
+.SS Subcommands
+.TP
+.B 0
+success, or the user declined a confirmation (a valid choice)
+.TP
+.B 1
+operation failed (verify FAIL, pacman \-U non-zero, restore error)
+.TP
+.B 2
+invalid args or refused (boot-critical without
+.BR \-\-confirm\-boot\-critical ,
+unknown filename / package / pacnew action)
+.TP
+.B 3
+snapshot not found or incomplete (missing
+.BR .timestamp )
+.SH FILES
+.TP
+.I ~/.config/archward/config.toml
+Default configuration. Auto-created on first run.
+.TP
+.I ~/.config/archward/profiles/<NAME>.toml
+Alternate profiles, selected with
+.BR \-\-profile .
+.TP
+.I ~/.local/state/archward/snapshots/
+Per-update snapshots. Each is a timestamped directory.
+.TP
+.I ~/.local/state/archward/logs/archward.log
+Rotating run log. The post-reboot recovery breadcrumb is written here.
+.TP
+.I /var/cache/pacman/pkg/
+Source for package downgrades. archward is cache-only by policy.
+.SH EXAMPLES
+.PP
+Diagnose a system that booted into a black screen, from tty1:
+.PP
+.nf
+.RS
+archward snapshot list
+archward verify \-\-snapshot 2026\-05\-15_134329
+.RE
+.fi
+.PP
+Roll back the package the verify FAIL implicated:
+.PP
+.nf
+.RS
+archward rollback package 2026\-05\-15_134329 nvidia
+archward verify
+.RE
+.fi
+.PP
+Bulk-restore a known-good state (auto-takes a pre-rollback snapshot):
+.PP
+.nf
+.RS
+archward rollback all\-packages 2026\-05\-15_134329
+.RE
+.fi
+.PP
+The cached package was pruned \(em pull it from the Arch Linux Archive:
+.PP
+.nf
+.RS
+# https://archive.archlinux.org/packages/n/nvidia/
+sudo pacman \-U /tmp/nvidia\-575.64.05\-1\-x86_64.pkg.tar.zst
+archward verify
+.RE
+.fi
+.PP
+Resolve a forgotten .pacnew:
+.PP
+.nf
+.RS
+archward pacnew list
+archward pacnew diff /etc/ssh/sshd_config.pacnew
+archward pacnew apply /etc/ssh/sshd_config \-\-strategy=take_new
+.RE
+.fi
+.SH SEE ALSO
+Full task-oriented recovery walkthrough and CLI reference:
+.PP
+.nf
+.RS
+https://github.com/indyfive11/archward/blob/main/docs/recovery.md
+https://github.com/indyfive11/archward/blob/main/docs/cli.md
+.RE
+.fi
+.PP
+.BR pacman (8),
+.BR paccache (8)
+.SH AUTHOR
+Rob Petersen. Source and issue tracker:
+https://github.com/indyfive11/archward
