@@ -1,21 +1,26 @@
 # CLAUDE.md — archward project context
 
-You've been launched in `~/dev/archward/`, a greenfield Python/PySide6 project. The canonical implementation plan is in [`PLAN.md`](./PLAN.md) — **read it before doing anything else**. This file gives you the operational context needed to start work.
+You've been launched in `~/dev/archward/`, a **shipped and maintained** Python/PySide6 project. v1 is complete through v0.3.5 (2026-05-14); the package is live on the AUR as `archward`. This file gives you the operational context for further maintenance / bug fixes / v0.4+ work.
+
+**Read first if you're new to the project:** [`CHANGELOG.md`](./CHANGELOG.md) for what's shipped, [`README.md`](./README.md) for user-facing surface, [`PLAN.md`](./PLAN.md) for historical design rationale (v1 is shipped — PLAN is reference, not a TODO).
 
 ## What is archward?
 
-A safe-update GUI for Arch-based Linux distributions (Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix). It:
+A safe-update GUI for Arch-based Linux distributions (Arch, EndeavourOS, Manjaro, CachyOS, Garuda, Artix). Pipeline order (as of v0.3.5):
 
-1. Snapshots system state (packages, configs, services)
-2. Gates the update (snapshot fresh? disk space OK?)
-3. Classifies pending updates HIGH/MEDIUM/LOW risk
-4. Runs `sudo pacman -Syu` (streaming output)
-5. Runs an auto-detected AUR helper (yay/paru/aurutils), gracefully skipping if none
-6. Detects and resolves new `.pacnew` files
-7. Verifies the system afterward (kernel, services, disk, pacnew, pacman log)
-8. Reports `RESULT:` tags compatible with the existing bash script harness
+1. Pre-flight (`db.lck` + single-instance lock)
+2. Snapshot (packages, configs, services, network state, pacnew baseline)
+3. Gates (snapshot freshness, disk)
+4. Risk classification (HIGH/MEDIUM/LOW + transaction preview)
+5. Pre-update hooks (`[hooks].pre_update`)
+6. Official update (`sudo pacman -Syu`)
+7. AUR phase (auto-detected helper)
+8. Pacnew resolution
+9. Verify (universal + opt-in services + `[hooks]` + plugin probes)
+10. Post-verify hooks (`[hooks].post_verify`)
+11. Report (RESULT tag + desktop notification)
 
-Target user: any Arch-based-distro user who wants snapshot-backed, gated updates. Ships as an AUR package (PKGBUILD in `packaging/`).
+Target user: any Arch-based-distro user who wants snapshot-backed, gated updates. Ships as an AUR package; `yay -S archward` installs the latest release.
 
 ## How this project came to be
 
@@ -25,12 +30,14 @@ The bash scripts are the **reference implementation for behavior** — read them
 
 ## Read first (in this order)
 
-1. [`PLAN.md`](./PLAN.md) — the canonical spec. Project structure, data model, TOML schema, pipeline phases, GUI design, packaging, test plan, implementation order.
-2. `/home/rob/bin/system-update.sh` — gate logic, risk classification, .pacnew strategy table (maintainer's local reference; not part of the public repo)
-3. `/home/rob/bin/pre-update-snapshot.sh` — what state to capture
-4. `/home/rob/bin/post-update-verify.sh` — *separate the universal checks from host-specific ones*. v1 only implements the universal ones.
-5. `/home/rob/dev/liberty-books/main.py` and `/home/rob/dev/liberty-books/ui/` — sibling PySide6 project; mirror these conventions where they apply.
-6. `/home/rob/dev/endeavoring-conky/README.md` and `/home/rob/dev/endeavoring-conky/LICENSE` — sibling public-repo conventions (GPL-3.0, README structure, AUR-friendly layout).
+1. [`CHANGELOG.md`](./CHANGELOG.md) — what shipped in each release. Most recent entry tells you the current state.
+2. [`README.md`](./README.md) — user-facing scope, install, GUI walkthrough.
+3. [`docs/development.md`](./docs/development.md) — local-dev setup, test commands, pre-tag checklist, optional NOPASSWD sudoers fragment.
+4. [`docs/hooks.md`](./docs/hooks.md) — `[hooks]` user guide (v0.3.1+).
+5. [`docs/plugins.md`](./docs/plugins.md) — `archward.verify_checks` entry-point plugin author guide (v0.3.3+).
+6. [`PLAN.md`](./PLAN.md) — historical design spec from before v0.1.0. v1 is shipped; treat PLAN as reference, not a TODO.
+7. `~/bin/system-update.sh`, `~/bin/pre-update-snapshot.sh`, `~/bin/post-update-verify.sh` — Rob's local bash pipeline archward generalizes. Reference for behavior on edge cases.
+8. `~/dev/liberty-books/` and `~/dev/endeavoring-conky/` — sibling PySide6 / AUR projects for convention comparisons.
 
 ## Locked decisions (do not relitigate)
 
@@ -46,32 +53,32 @@ The bash scripts are the **reference implementation for behavior** — read them
 | Repo | `git@github.com:indyfive11/archward.git` (public) — **do not create or push without explicit user request** |
 | AUR namespace | `archward` — registered, maintainer `indyfive11`. Published from `~/dev/archward-aur/` (PKGBUILD + .SRCINFO only; the rest is pulled from the GitHub release tarball at build time). |
 | Build backend | hatchling |
-| v1 verify scope | **Universal checks + opt-in services list ONLY.** No network probes, no HTTP health, no port-listen checks, no mountpoint checks — those are host-specific and shipped as `[hooks]` (v0.3.1+). |
+| Verify scope | Universal checks (kernel, .pacnew, disk, pacman log) + opt-in `systemctl is-active` services + `[hooks]` for shell-command checks (v0.3.1+) + plugin probes via `archward.verify_checks` entry points for Python checks (v0.3.3+). Host-specific concerns (network probes, HTTP health, mountpoint, etc.) belong in hooks or plugins, not in archward core. |
 
-## v2 reservations — leave seams, do not implement
+## Shipped feature surface (do not reintroduce as TODOs)
 
-Per PLAN.md §11. All originally-reserved seams have now shipped.
-
-Originally reserved, now shipped (do not reintroduce as TODOs):
+Per PLAN.md §11. Every originally-reserved v2 seam plus every post-release polish item has shipped.
 
 - **`[hooks]` (v0.3.1)** — `HookRunner` runs pre-update + post-verify shell hooks with `HookResult` capture, GUI rail rows, and a Verify-view bucket. See `docs/hooks.md`.
-- **Profiles (v0.3.2)** — `--profile NAME` on both CLI and GUI, plus in-window Profiles tab in Preferences for list/switch/new/rename/delete.
+- **Profiles, CLI + GUI (v0.3.2)** — `--profile NAME` on both front-ends, in-window Profiles tab in Preferences for list/switch/new/rename/delete. setup_logging bugfix bundled.
 - **Custom verify probes (v0.3.3)** — `archward.verify_checks` entry-point group; third-party plugins contribute checks that land in a `plugin` bucket. See `docs/plugins.md`.
-- **Auto-prune stale services on `--detect` (v0.3.3)** — `--detect` now proposes removals (opt-in) for `services.to_verify` entries whose unit files no longer resolve. CLI and Preferences both surface the prompt.
-- **Preferences inline help (v0.1.2)** — every schema tab has italic help labels under each field.
+- **Stale-service detection, three surfaces (v0.3.3)** — verify-phase WARN row distinguishes "no such unit" from "not active"; `archward --detect` proposes opt-in removals; `services.auto_prune` config flag enables inline auto-prune with persistent write-back.
+- **Remember-last-used profile (v0.3.4)** — opt-in QSettings toggle in Preferences → Profiles; backed by `archward.ui.persistent_state`. State lives in `~/.config/archward/archward.conf`, separate from any profile's TOML.
+- **Profiles tab management (v0.3.5)** — "Diff vs default" modal, "Import…" and "Export…" buttons. Diff helper at `archward.config.diff.unified_diff()`.
+- **Preferences inline help (v0.1.2 + ongoing)** — every schema tab has italic help labels under each field, with `_section_help()` intros on the more involved tabs.
 
-## Implementation order (from PLAN.md §13)
+## Implementation history (PLAN.md §13 — completed)
 
-Start at **Phase 1: CLI core, no GUI/AUR/config**. Build a CLI tool that runs the existing bash pipeline behavior end-to-end on Rob's machine. Then layer config, AUR, and GUI in subsequent phases. Each phase is independently demoable.
+The v1 phases below all shipped in v0.1.0–v0.1.4; the v2 backlog shipped in v0.3.x. Listed for archaeological context only — don't treat any item here as open work.
 
-1. CLI core (skeleton, models, sudo, pacman query/runner, snapshot, gates, hard-coded risk, official update, universal verify, RESULT tags)
-2. Config + auto-detect
-3. AUR phase (yay first, then paru, then aurutils)
-4. Minimal GUI shell (main_window, phase_rail, log_pane, qt_bus)
-5. Phase views (snapshot/gates simplest; risk/pacnew complex)
-6. Preferences dialog
-7. Packaging polish (desktop file, icon, README, PKGBUILD)
-8. v2 backlog (not v1)
+1. ✅ CLI core (skeleton, models, sudo, pacman query/runner, snapshot, gates, risk, official update, universal verify, RESULT tags)
+2. ✅ Config + auto-detect
+3. ✅ AUR phase (yay → paru → aurutils preference)
+4. ✅ GUI shell (main_window, phase_rail, log_pane, qt_bus)
+5. ✅ Phase views (snapshot, gates, risk, update, pacnew, verify)
+6. ✅ Preferences dialog (12 tabs with inline help)
+7. ✅ Packaging (desktop file, icon, README, PKGBUILD, AUR submission)
+8. ✅ v2 backlog — see "Shipped feature surface" above
 
 ## Rob's preferences — strict rules
 
@@ -113,25 +120,12 @@ Rob has an extensive memory system at `/home/rob/.claude/projects/-home-rob/memo
 - `feedback_sudo_tee_pattern.md` — `sudo tee` not `sudo echo >`.
 - `feedback_vpn_toggle.md` — don't run VPN toggles.
 
-## Repository setup — when ready
+## AUR package — release workflow
 
-When Rob is ready to make this a git repo (only when explicitly asked):
-
-```bash
-cd ~/dev/archward
-git init
-git add .
-git commit -m "Initial commit: project structure and plan"
-# DO NOT push or create remote without explicit user request
-```
-
-The eventual remote will be `git@github.com:indyfive11/archward.git` (matches the `indyfive11` GitHub handle Rob uses for `endeavoring-conky` and `liberty-books`).
-
-## AUR package — submission state and release workflow
-
-archward ships as `archward` on the AUR (first published v0.3.2, 2026-05-14).
+archward ships as `archward` on the AUR (live since v0.3.2, currently at v0.3.5 as of 2026-05-14).
 **Page:** https://aur.archlinux.org/packages/archward
 **Maintainer:** `indyfive11`
+**Installable:** `yay -S archward`
 
 ### Local layout
 - **AUR git clone:** `~/dev/archward-aur/` (separate working tree; contains
@@ -209,6 +203,7 @@ For testing on other distros: spin up a VM or container. PLAN.md §14 has the fu
 
 ## When in doubt
 
-- The plan is canonical. If something in this CLAUDE.md contradicts PLAN.md, PLAN.md wins.
+- **CHANGELOG.md is the canonical record of shipped state.** PLAN.md is historical — if it says something is "v2 reserved" but CHANGELOG shows it shipped in v0.3.x, CHANGELOG wins.
 - If a design question arises that isn't covered, ask Rob — don't guess.
-- If you need to deviate from the plan (e.g., a referenced library doesn't exist), surface the deviation explicitly before committing to it.
+- Don't reintroduce items already shipped as TODOs. Cross-check "Shipped feature surface" above before proposing work that sounds like it might already exist.
+- Non-trivial feature work uses Plan mode before coding; small/contained changes can dive straight in.
