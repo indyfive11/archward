@@ -44,16 +44,22 @@ The bash scripts are the **reference implementation for behavior** — read them
 | Configuration | Single TOML at `~/.config/archward/config.toml`. Auto-detect on first run. |
 | License | GPL-3.0-or-later |
 | Repo | `git@github.com:indyfive11/archward.git` (public) — **do not create or push without explicit user request** |
+| AUR namespace | `archward` — registered, maintainer `indyfive11`. Published from `~/dev/archward-aur/` (PKGBUILD + .SRCINFO only; the rest is pulled from the GitHub release tarball at build time). |
 | Build backend | hatchling |
-| v1 verify scope | **Universal checks + opt-in services list ONLY.** No network probes, no HTTP health, no port-listen checks, no mountpoint checks — those are host-specific and reserved for v2 hooks. |
+| v1 verify scope | **Universal checks + opt-in services list ONLY.** No network probes, no HTTP health, no port-listen checks, no mountpoint checks — those are host-specific and shipped as `[hooks]` (v0.3.1+). |
 
 ## v2 reservations — leave seams, do not implement
 
-Per PLAN.md §11:
+Per PLAN.md §11. Most originally-reserved seams have now shipped — the remaining open seams are:
 
-- `pipeline/hooks.py` — `HookRunner.run_pre_update()` / `run_post_verify()` are **no-op stubs** in v1; `Pipeline` already calls them at the right points. v2 fills in the body and adds `[hooks]` to `ConfigModel`.
-- **Profiles** — `load_config(path)` is the only config entry point. v2 adds `--profile <name>` flag → resolves which path to load. No code changes elsewhere needed.
-- **Custom verify probes** — `Verifier.collect_checkers()` in `pipeline/verify_phase.py` is hard-coded in v1. v2 will scan `importlib.metadata.entry_points()` for `archward.verify_checks`.
+- **Custom verify probes** — `Verifier.collect_checkers()` in `pipeline/verify_phase.py` is still hard-coded. v2 will scan `importlib.metadata.entry_points()` for `archward.verify_checks`.
+- **Auto-prune missing services on `--detect`** — today `--detect` only proposes service *additions*. PLAN.md §830-867 has implementation hints for surfacing stale service removals via a `service_removals` field on `ConfigDiff`.
+
+Originally reserved, now shipped (do not reintroduce as TODOs):
+
+- **`[hooks]` (v0.3.1)** — `HookRunner` runs pre-update + post-verify shell hooks with `HookResult` capture, GUI rail rows, and a Verify-view bucket. See `docs/hooks.md`.
+- **Profiles (v0.3.2)** — `--profile NAME` on both CLI and GUI, plus in-window Profiles tab in Preferences for list/switch/new/rename/delete.
+- **Preferences inline help (v0.1.2)** — every schema tab has italic help labels under each field.
 
 ## Implementation order (from PLAN.md §13)
 
@@ -121,6 +127,74 @@ git commit -m "Initial commit: project structure and plan"
 ```
 
 The eventual remote will be `git@github.com:indyfive11/archward.git` (matches the `indyfive11` GitHub handle Rob uses for `endeavoring-conky` and `liberty-books`).
+
+## AUR package — submission state and release workflow
+
+archward ships as `archward` on the AUR (first published v0.3.2, 2026-05-14).
+**Page:** https://aur.archlinux.org/packages/archward
+**Maintainer:** `indyfive11`
+
+### Local layout
+- **AUR git clone:** `~/dev/archward-aur/` (separate working tree; contains
+  only PKGBUILD + .SRCINFO. Everything else is pulled from the GitHub
+  release tarball at `makepkg` time.)
+- **Canonical PKGBUILD + .SRCINFO live in this repo at `packaging/`** —
+  the AUR clone is a copy destination, not the source of truth. Always
+  edit `packaging/PKGBUILD`, regenerate `.SRCINFO` there, then sync to
+  `~/dev/archward-aur/` for the push.
+
+### SSH access
+- **Dedicated key:** `~/.ssh/aur` (ed25519), public half pasted into AUR
+  account. Not the same as `id_ed25519`.
+- **`~/.ssh/config` Host block** for `aur.archlinux.org` pins
+  `IdentityFile ~/.ssh/aur`, `Port 22`, `IdentitiesOnly yes` (the last
+  matters because the global ssh_config sets Port 1111 and the agent may
+  hold multiple keys).
+- Test with: `ssh aur.archlinux.org help` → expect the AUR command list,
+  then disconnect. `Permission denied (publickey)` means the pubkey isn't
+  on the account.
+
+### Per-release submission workflow
+
+For each tagged release on GitHub (e.g. v0.3.3):
+
+```bash
+# 1. Bump pkgver + replace SKIP with the real sha256 of the GitHub tarball.
+cd ~/dev/archward/packaging
+curl -sL -o /tmp/archward-vX.Y.Z.tar.gz \
+    "https://github.com/indyfive11/archward/archive/vX.Y.Z.tar.gz"
+sha256sum /tmp/archward-vX.Y.Z.tar.gz
+#   → paste hash into PKGBUILD's sha256sums=(...) and bump pkgver=...
+
+# 2. Regenerate .SRCINFO (required by AUR; rejected without it).
+makepkg --printsrcinfo > .SRCINFO
+
+# 3. Smoke-test the recipe locally (build only — runtime deps already installed).
+makepkg -f --nodeps
+#   → expect: archward-X.Y.Z-1-any.pkg.tar.zst built; install paths sane.
+rm -rf src pkg archward-* *.pkg.tar.zst   # cleanup
+
+# 4. Sync to the AUR clone, commit, push.
+cp PKGBUILD .SRCINFO ~/dev/archward-aur/
+cd ~/dev/archward-aur
+git add PKGBUILD .SRCINFO
+git commit -m "archward X.Y.Z"
+git push origin master   # AUR uses 'master', not 'main'
+```
+
+### Keywords (search discoverability)
+Set with `ssh aur.archlinux.org set-keywords archward <space-separated list>`.
+Currently: `gui pacman safe-update snapshot update`. To change, re-run
+the command with the full replacement list (set is destructive, not
+additive).
+
+### Build-deps note
+Building the PKGBUILD locally needs `python-build python-installer
+python-hatchling` (makedepends) and `pyside6 python-tomli-w`
+(rundeps, for `makepkg -s` to pass). These are pacman-installable from
+extra/. Skip the runtime-dep check with `makepkg -f --nodeps` if you
+just want to verify the recipe builds without installing pyside6
+system-wide.
 
 ## Test machine context
 
