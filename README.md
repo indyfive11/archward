@@ -24,21 +24,31 @@ system updates. Ships as both a CLI tool (`archward`) and a PySide6 GUI
    replacements and conflict warnings that `--noconfirm` would silently
    default through (querying the synced checkupdates DB so the preview is
    meaningful even without `pacman -Sy`).
-5. **Official update** — `sudo pacman -Syu --noconfirm --noprogressbar
-   --color=never`, line-buffered + ANSI-stripped streaming.
-6. **AUR** — auto-detect `yay` → `paru` → `aurutils`, run helper update,
+5. **Pre-update hooks** — run user-defined shell commands from
+   `cfg.hooks.pre_update` (e.g. external-backup freshness gate,
+   maintenance-window blackout). Non-zero exit can optionally abort the
+   pipeline via `fail_pipeline_on_error`.
+6. **Official update** — `sudo pacman -Syu --noconfirm --noprogressbar
+   --color=never`, line-buffered + ANSI-stripped streaming. The user
+   can deselect specific packages at approval time → flow through as
+   `--ignore` flags.
+7. **AUR** — auto-detect `yay` → `paru` → `aurutils`, run helper update,
    capture build failures (last 50 lines per failed package). Skipped
    gracefully if no helper is on PATH.
-7. **Pacnew** — find new `.pacnew` files since snapshot, classify per a
+8. **Pacnew** — find new `.pacnew` files since snapshot, classify per a
    rule table (sshd_config / mirrorlist / pacman.conf / fstab / grub /
    resolved.conf / faillock.conf / sysctl.d/* / *.hook); apply preserves
    original ownership and permissions.
-8. **Verify** — kernel match, .pacnew remaining, disk, pacman.log scan,
-   opt-in `systemctl is-active` services list, EndeavorOS
+9. **Verify** — kernel match, .pacnew remaining, disk, pacman.log scan,
+   opt-in `systemctl is-active` services list, optional
    reboot-recommended log.
-9. **Report** — emit `RESULT:` tag (`SUCCESS` / `NEEDS_REVIEW` /
-   `REBOOT_NEEDED` / `PACNEW_MERGE_NEEDED` / `VERIFY_FAILED` /
-   `UPDATE_FAILED`) for scripted use; secondary tags annotate the primary.
+10. **Post-verify hooks** — run user-defined shell commands from
+    `cfg.hooks.post_verify` (e.g. HTTP health probes, mountpoint checks,
+    real-time reachability). Always best-effort; never abort.
+11. **Report** — emit `RESULT:` tag (`SUCCESS` / `NEEDS_REVIEW` /
+    `REBOOT_NEEDED` / `PACNEW_MERGE_NEEDED` / `VERIFY_FAILED` /
+    `UPDATE_FAILED`) for scripted use; secondary tags annotate the primary.
+    Desktop notification fires via `notify-send` (opt-out).
 
 ## Install
 
@@ -172,33 +182,74 @@ idempotence requirements).
 
 The single-window GUI mirrors the CLI pipeline:
 
-- **Phase rail** (left) — 9 rows (Preflight → Result) with status icons:
-  `○ pending`, `⟳ running`, `● pass`, `▲ warn`, `✕ fail`, `– skipped`.
+- **Phase rail** (left) — 11 rows (Preflight → Snapshot → Gates → Risk →
+  Pre-hooks → Update (official) → Update (AUR) → Pacnew → Verify →
+  Post-hooks → Result) with status icons: `○ pending`, `⟳ running`,
+  `● pass`, `▲ warn`, `✕ fail`, `– skipped`. Clickable for back-navigation;
+  the active phase row is highlighted.
 - **Content area** (right) — `QStackedWidget` whose page switches with the
   active phase: snapshot progress checklist, gates table, risk
-  HIGH/MEDIUM/LOW tree, update stream pane (shared official + AUR), pacnew
-  table, verify grouped by bucket. The view stays on the last live phase
-  after completion.
+  HIGH/MEDIUM/LOW tree with per-package checkboxes + Proceed/Cancel
+  buttons, update stream pane (shared official + AUR), pacnew table with
+  per-row View Diff / Keep Ours / Take New / Edit buttons, verify grouped
+  by bucket (universal · services · hooks). The view stays on the last
+  live phase after completion.
 - **Log pane** (bottom, collapsible) — full text of everything the pipeline
-  emitted.
+  emitted, dual-logged to `~/.local/state/archward/logs/archward.log`.
 - **Result strip** (bottom) — slim, color-coded banner showing the final
   RESULT tag plus a compact one-liner of secondary signals.
-- **Preferences…** toolbar button — 10-tab dialog over the TOML schema with
-  Re-detect (propose diff), Reset to defaults, Open config in `$EDITOR`.
+- **Snapshot Browser…** toolbar button — modal browser over all past
+  snapshots with per-file config restore (perm-preserving) and per-package
+  upgrade/downgrade (via `pacman -U` against the local cache). Bulk
+  variants ("Restore all configs", "Apply all package versions") run in
+  one atomic transaction; boot-critical packages require Type-YES
+  confirmation. A pre-rollback snapshot is taken automatically so
+  rollback-of-rollback works.
+- **Preferences…** toolbar button — 11-tab dialog over the TOML schema
+  (General · Gates · Risk · Services · Pacnew · AUR · Pacman · Verify ·
+  Privilege · Hooks · Advanced) with inline help text per field. Advanced
+  tab has Re-detect (propose diff), Reset to defaults, Open config in
+  `$EDITOR`.
 
-HIGH-risk approval and recoverable gate overrides route through modal
-dialogs; the pipeline worker thread blocks on the user's answer via
-`BlockingQueuedConnection`.
+HIGH-risk approval happens **inline** in the Risk view: per-package
+checkboxes default checked, Proceed/Cancel buttons enable when the
+pipeline reaches risk approval, and deselected package names flow through
+as `--ignore=<pkg>` to pacman. Recoverable gate overrides still use a
+modal QMessageBox. Both block the pipeline worker thread on the user's
+answer via Qt threading primitives.
+
+Real-update mutations (config restore, package upgrade/downgrade) run on
+a `QThread` with an indeterminate `QProgressDialog` so the GUI stays
+responsive during `pacman -U`.
 
 ## Scope
 
-archward ships **universal** safe-update behavior — gates, risk
-classification, pacnew strategy, kernel-match verify — that applies to any
-Arch-based machine. Host-specific concerns (custom network probes, HTTP
-health checks for self-hosted services, port-listen verification, mountpoint
-checks for personal backup volumes, VPN connectivity gates) are deliberately
-**out of scope for v1** and reserved for v2 hooks (`pipeline/hooks.py` is
-the seam — pre-update and post-verify shell commands run from your config).
+archward has two layers:
+
+**Universal — built in, applies to any Arch-based machine.** Snapshot
+(packages, configs, services, kernel, network state, pacnew baseline),
+pre-flight (`db.lck` + single-instance), gates (snapshot freshness, disk),
+risk classification (HIGH/MEDIUM/LOW with kernel-pattern matching and
+transaction preview), per-package deselect at HIGH-risk approval,
+official pacman update, AUR update via auto-detected helper, pacnew rule
+table with permission-preserving apply, verify (kernel match, .pacnew
+remaining, disk, pacman.log scan, opt-in `systemctl is-active` services),
+granular and bulk rollback (snapshot browser + per-file config restore +
+per-package downgrade from the local pacman cache), desktop notifications
+on completion, theme-aware GUI colors.
+
+**Machine-specific — wired via `[hooks]` in your config.** External
+backup-freshness gates, HTTP/TCP service health probes, mountpoint
+checks, network-interface presence, specific bind verification,
+maintenance-window blackouts. Each is a small shell command with an
+OK/WARN message convention; output renders as a `hooks` bucket in the
+Verify view. See **[`docs/hooks.md`](docs/hooks.md)** for design
+patterns and worked examples.
+
+**Out of scope (intentional):** running as a daemon, scheduling cron-style
+recurring updates, network-only / offline-only modes, distros not in the
+Arch family. archward is invoked manually (CLI) or via the GUI and runs
+to completion.
 
 ## Development
 
