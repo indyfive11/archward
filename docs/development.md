@@ -124,14 +124,74 @@ unaware of which.
 
 ## Releasing
 
-1. Update `__version__` in `src/archward/__init__.py` and `pyproject.toml`.
-2. Add a release section to `CHANGELOG.md` (move from `Unreleased` to
-   `[<version>] — <date>`).
-3. Run the full test suite + smoke-test `archward --dry-run` on a clean VM.
-4. Tag: `git tag -a v<version> -m "Release v<version>"`.
-5. Build wheel: `python -m build --wheel --no-isolation`.
-6. PKGBUILD's `pkgver` and `source` URL pick up the GitHub release tarball
-   automatically once the tag is pushed.
+### Preferred pattern: feature + docs in one commit
+
+Each feature commit should include any README / CHANGELOG / docs updates
+the feature implies. The tag at the end of that commit then represents
+the feature *and* its documentation in a single, consistent point.
+
+The opposite — landing the code, then noticing during smoke-test that
+the README's Scope section is stale, then patching docs in a follow-up
+commit — is how v0.3.1 ended up frozen at a commit whose README still
+described hooks as "v2 reserved" even though that commit *was* the
+hooks release. Avoid the two-commit pattern when you can.
+
+If you genuinely discover doc drift only *after* tagging (testing on a
+real workload surfaces something), the two paths are:
+
+- **Move the tag** if the tag is hours old, no GitHub release was
+  attached, no downstream consumer (AUR / package, etc.) has pinned to
+  it. Destructive but acceptable when the tag is effectively pre-public.
+- **Patch-bump** (v0.X.Y → v0.X.Y+1) for anything that's been published.
+
+### Pre-tag checklist
+
+Before running `git tag`, work through this list. **Tagging should
+never be the first thing you do after `git commit`** — at minimum let
+the commit sit long enough for a cold re-read.
+
+1. **Version markers** — `__version__` in `src/archward/__init__.py` and
+   `version =` in `pyproject.toml` both match the tag you're about to
+   create.
+2. **CHANGELOG** — the entry for this version is dated and complete; the
+   `[Unreleased]` section is empty (or only holds genuinely deferred
+   items); the link reference at the bottom (`[X.Y.Z]: …/tag/vX.Y.Z`) is
+   present.
+3. **README sweep** — open the README and read these three sections cold,
+   asking "would someone landing on the tag tree see something stale?":
+   - **Scope** — does the feature list match what's actually in this
+     release? Look for any v1/v2 framing that's been superseded.
+   - **GUI walkthrough** — phase rail row count, button list, dialog
+     descriptions, anything UI-shaped that the feature touched.
+   - **Pipeline** — numbered step list, especially if the feature added
+     a new pipeline checkpoint (hooks are step 5 / 10 since v0.3.1).
+4. **CLI flags** — if the feature added/changed any flag, the `CLI flags`
+   section in the README reflects current `argparse` output.
+5. **`docs/hooks.md` (or any guide doc)** — if the feature is something
+   the user would consult a doc page about, the doc page is current.
+6. **Tests** — full suite green: `./venv/bin/python3 -m pytest tests/unit/ -q`.
+7. **Smoke test** — `archward --dry-run` runs to completion locally; if
+   the change touches the update path, run a real update too.
+8. **Cold re-read of the commit** — `git show HEAD` and read it fresh. If
+   you spot something stale, fix it before tagging.
+
+### Tagging
+
+After the checklist passes:
+
+```
+git tag -a v<version> -m "Release v<version> — <one-line summary>"
+git push origin v<version>
+```
+
+### After tagging
+
+- Build wheel for local testing: `python -m build --wheel --no-isolation`.
+- PKGBUILD's `pkgver` and `source` URL pick up the GitHub release tarball
+  automatically once the tag is pushed.
+- Optionally `gh release create v<version>` to attach a GitHub Release
+  page with the CHANGELOG body — only worth doing for milestone bumps,
+  not every patch.
 
 The v0.1.0 PKGBUILD uses `sha256sums=('SKIP')` for development convenience.
 Replace with a real sha256 before publishing to AUR.
