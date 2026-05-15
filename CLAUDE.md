@@ -1,6 +1,6 @@
 # CLAUDE.md — archward project context
 
-You've been launched in `~/dev/archward/`, a **shipped and maintained** Python/PySide6 project. v0.4.1 just shipped (2026-05-15) — the package is live on the AUR as `archward`. This file gives you the operational context for further maintenance / bug fixes / v0.5+ work.
+You've been launched in `~/dev/archward/`, a **shipped and maintained** Python/PySide6 project. v0.4.2 just shipped (2026-05-15) — the package is live on the AUR as `archward`. This file gives you the operational context for further maintenance / bug fixes / v0.5+ work.
 
 **Read first if you're new to the project:** [`CHANGELOG.md`](./CHANGELOG.md) for what's shipped, [`README.md`](./README.md) for user-facing surface, [`PLAN.md`](./PLAN.md) for historical design rationale (v1 is shipped — PLAN is reference, not a TODO).
 
@@ -128,7 +128,7 @@ Rob has an extensive memory system at `/home/rob/.claude/projects/-home-rob/memo
 
 ## AUR package — release workflow
 
-archward ships as `archward` on the AUR (live since v0.3.2, currently at v0.4.1 as of 2026-05-15).
+archward ships as `archward` on the AUR (live since v0.3.2, currently at v0.4.2 as of 2026-05-15).
 **Page:** https://aur.archlinux.org/packages/archward
 **Maintainer:** `indyfive11`
 **Installable:** `yay -S archward`

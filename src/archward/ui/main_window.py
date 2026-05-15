@@ -304,6 +304,14 @@ class MainWindow(QMainWindow):
         self._reset_views()
         self._dry_btn.setEnabled(False)
         self._update_btn.setEnabled(False)
+        # v0.4.2 hotfix: warm the sudo timestamp BEFORE the pipeline starts so
+        # the askpass dialog appears upfront, not mid-snapshot. Without this,
+        # the first sudo call inside _gather_configs (cp /etc/pacman.conf,
+        # tar /etc/ssh/sshd_config.d, etc.) is what triggered the password
+        # prompt — surprising users who'd looked away after clicking Run
+        # Update, and re-prompting per file if ksshaskpass intermittently
+        # failed to parse the prompt.
+        self._warmup_sudo_for_run()
         label = "dry-run" if mode is Mode.DRY_RUN else "update"
         self._status.showMessage(f"Running {label}…")
 
@@ -337,6 +345,38 @@ class MainWindow(QMainWindow):
         for v in self._views.values():
             if hasattr(v, "reset"):
                 v.reset()
+
+    def _warmup_sudo_for_run(self) -> bool:
+        """Prime the sudo timestamp via askpass before the pipeline starts.
+
+        Runs `sudo -A -v` synchronously on the main thread. The askpass
+        binary (ksshaskpass on KDE) shows its own dialog while we block;
+        this is the same UX as the CLI path's setup_app warmup. Returns
+        True on success, False on failure — failure is non-fatal: the
+        pipeline will simply re-prompt at the first sudo call inside
+        snapshot, matching pre-v0.4.2 behavior.
+
+        Calling this here (rather than in __init__) means archward
+        doesn't pop a password prompt unless the user actually clicks
+        Run / Dry-Run.
+        """
+        self._status.showMessage("Authenticating with sudo…")
+        # Give Qt a tick to repaint the status bar before the blocking call.
+        from PySide6.QtCore import QCoreApplication
+        QCoreApplication.processEvents()
+        try:
+            ok = self.strategy.warmup()
+        except Exception:  # noqa: BLE001 — warmup must never crash the run
+            log.exception("sudo warmup raised")
+            ok = False
+        if ok:
+            log.info("sudo warmup succeeded — timestamp warm")
+        else:
+            log.warning("sudo warmup failed; the pipeline will re-prompt on first sudo call")
+            self._status.showMessage(
+                "sudo warmup failed — askpass may prompt again during the run."
+            )
+        return ok
 
     # ── Event routing ──────────────────────────────────────────────────────
 

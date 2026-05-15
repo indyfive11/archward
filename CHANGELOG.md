@@ -6,6 +6,45 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-15
+
+**Hotfix: sudo askpass appears at run start, not mid-snapshot.**
+
+### Fixed
+
+- **GUI never warmed the sudo timestamp before starting a pipeline.**
+  `MainWindow` built the sudo strategy at `__init__` time but never
+  called `strategy.warmup()` — that call only happened in the CLI's
+  `setup_app()` path. Consequence: the first sudo call inside the
+  snapshot config-gather phase (`sudo -A cp /etc/pacman.conf …`, then
+  `sudo -A tar /etc/ssh/sshd_config.d`, etc.) was what triggered the
+  askpass dialog. For users without NOPASSWD coverage for `cp` / `tar`
+  / `chown`, this meant:
+  1. The password dialog popped up *mid-snapshot* instead of upfront,
+     surprising anyone who'd looked away after clicking Run Update.
+  2. If ksshaskpass intermittently failed to parse the prompt — a
+     known external bug, seen in archward logs as
+     `ksshaskpass: Unable to parse phrase "[sudo] password for rob: "`
+     followed by `sudo: no password was provided` — sudo bailed and
+     archward continued to the next file, which prompted again.
+     Users reported "had to enter password a few times" per run.
+
+  Fix: `MainWindow._start_run()` now calls a new
+  `_warmup_sudo_for_run()` helper before constructing the
+  `PipelineWorker`. The askpass dialog appears immediately on the
+  Run / Dry-Run click; subsequent sudo calls in the same run reuse
+  the cached timestamp. If warmup fails, the status bar surfaces the
+  failure and the pipeline runs anyway — sudo will re-prompt at the
+  first call, matching pre-v0.4.2 behavior (no regression on the
+  cold-cache path).
+
+### Tests
+
+325 → **329** (+4). New `tests/unit/test_main_window_sudo_warmup.py`:
+warmup-method success / failure / exception swallowing, plus a
+call-order regression guard asserting `_warmup_sudo_for_run` runs
+before `PipelineWorker` is constructed.
+
 ## [0.4.1] — 2026-05-15
 
 **Theme: audit & reliability.** Zero new features. Three parallel deep
