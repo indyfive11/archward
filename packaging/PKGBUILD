@@ -51,4 +51,6 @@ package() {
     "$pkgdir/usr/share/doc/$pkgname/cli.md"
   install -Dm644 docs/recovery.md \
     "$pkgdir/usr/share/doc/$pkgname/recovery.md"
+  install -Dm755 src/archward/data/stale_libs_scan \
+    "$pkgdir/usr/share/archward/stale_libs_scan"
 }
