@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -89,7 +89,6 @@ def _tuple_to_lines(items) -> str:
 
 def _grey_out(item: QTableWidgetItem) -> None:
     """Apply a greyed-out foreground to a read-only table item."""
-    from PySide6.QtGui import QColor
     item.setForeground(QColor("#888888"))
 
 
@@ -1850,14 +1849,82 @@ class PreferencesDialog(QDialog):
         # profile_created / profile_deleted are informational only — the tab
         # already refreshed its own list, and the dialog has nothing to do.
 
-        self._tab_widget = QTabWidget()
+        # ── Sidebar + stacked content ──────────────────────────────────────
+        self._sidebar = QListWidget()
+        self._sidebar.setFixedWidth(175)
+        self._sidebar.setSpacing(1)
+        self._content = QStackedWidget()
+
+        # Maps sidebar row index → _Tab (or None for non-config entries).
+        self._sidebar_row_to_tab: dict[int, _Tab | None] = {}
+        # Maps sidebar row index → sidebar display label (for reset dialog).
+        self._sidebar_row_to_label: dict[int, str] = {}
+        # Keep _config_tab_indices as row→tab for existing helpers.
         self._config_tab_indices: dict[int, _Tab] = {}
-        for label, tab in zip(labels, self._tabs):
-            idx = self._tab_widget.addTab(tab, label)
-            self._config_tab_indices[idx] = tab
-        self._tab_widget.addTab(self._cache, "Cache")
-        self._tab_widget.addTab(self._profiles, "Profiles")
-        self._tab_widget.addTab(self._advanced, "Advanced")
+
+        from archward.ui.theme import brand_palette
+        brand = brand_palette()
+
+        def _add_category(text: str) -> None:
+            item = QListWidgetItem(text)
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            font = QFont()
+            font.setBold(True)
+            font.setPointSize(font.pointSize() - 1)
+            item.setFont(font)
+            item.setForeground(brand.accent_fg)
+            item.setData(Qt.ItemDataRole.UserRole, "category")
+            self._sidebar.addItem(item)
+            row = self._sidebar.count() - 1
+            self._sidebar_row_to_tab[row] = None
+
+        def _add_entry(label: str, widget: QWidget, tab: _Tab | None = None) -> None:
+            item = QListWidgetItem(f"  {label}")
+            self._sidebar.addItem(item)
+            row = self._sidebar.count() - 1
+            self._content.addWidget(widget)
+            self._sidebar_row_to_tab[row] = tab
+            self._sidebar_row_to_label[row] = label
+            if tab is not None:
+                self._config_tab_indices[row] = tab
+
+        def _add_separator() -> None:
+            item = QListWidgetItem()
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            item.setSizeHint(item.sizeHint().__class__(0, 8))
+            self._sidebar.addItem(item)
+            row = self._sidebar.count() - 1
+            self._sidebar_row_to_tab[row] = None
+
+        tab_map = dict(zip(labels, self._tabs))
+
+        _add_category("WORKFLOW")
+        _add_entry("General",   tab_map["General"],   tab_map["General"])
+        _add_entry("Gates",     tab_map["Gates"],     tab_map["Gates"])
+        _add_category("PACKAGES")
+        _add_entry("AUR",       tab_map["AUR"],       tab_map["AUR"])
+        _add_entry("Pacman",    tab_map["Pacman"],    tab_map["Pacman"])
+        _add_entry("Pacnew",    tab_map["Pacnew"],    tab_map["Pacnew"])
+        _add_category("SAFETY")
+        _add_entry("Risk",      tab_map["Risk"],      tab_map["Risk"])
+        _add_entry("Verify",    tab_map["Verify"],    tab_map["Verify"])
+        _add_entry("Privilege", tab_map["Privilege"], tab_map["Privilege"])
+        _add_category("SYSTEM")
+        _add_entry("Services",  tab_map["Services"],  tab_map["Services"])
+        _add_entry("Hooks",     tab_map["Hooks"],     tab_map["Hooks"])
+        _add_separator()
+        _add_entry("Profiles",  self._profiles)
+        _add_entry("Cache",     self._cache)
+        _add_entry("Advanced",  self._advanced)
+
+        self._sidebar.currentRowChanged.connect(self._on_sidebar_row_changed)
+
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        body_layout.addWidget(self._sidebar)
+        body_layout.addWidget(self._content, stretch=1)
 
         self._restore_tab_btn = QPushButton("Restore tab defaults")
         restore_all_btn = QPushButton("Restore all defaults")
@@ -1876,14 +1943,19 @@ class PreferencesDialog(QDialog):
         btn_row.addStretch(1)
         btn_row.addWidget(save_cancel)
 
-        self._tab_widget.currentChanged.connect(self._on_tab_changed)
-
         layout = QVBoxLayout(self)
-        layout.addWidget(self._tab_widget)
+        layout.addWidget(body, stretch=1)
         layout.addLayout(btn_row)
 
         self._load_all()
-        self._on_tab_changed(self._tab_widget.currentIndex())
+
+        # Select the first selectable row (General).
+        for row in range(self._sidebar.count()):
+            item = self._sidebar.item(row)
+            if item and (item.flags() & Qt.ItemFlag.ItemIsEnabled) and row in self._sidebar_row_to_label:
+                self._sidebar.setCurrentRow(row)
+                break
+        self._on_sidebar_row_changed(self._sidebar.currentRow())
 
     # ── Tab orchestration ─────────────────────────────────────────────────
 
@@ -2023,15 +2095,20 @@ class PreferencesDialog(QDialog):
         self._cfg = default_config()
         self._load_all()
 
-    def _on_tab_changed(self, index: int) -> None:
-        self._restore_tab_btn.setEnabled(index in self._config_tab_indices)
+    def _on_sidebar_row_changed(self, row: int) -> None:
+        # Skip non-selectable rows (categories, separators).
+        if row not in self._sidebar_row_to_label:
+            return
+        stack_idx = list(self._sidebar_row_to_label.keys()).index(row)
+        self._content.setCurrentIndex(stack_idx)
+        self._restore_tab_btn.setEnabled(row in self._config_tab_indices)
 
     def _on_reset_current_tab(self) -> None:
-        idx = self._tab_widget.currentIndex()
-        tab = self._config_tab_indices.get(idx)
+        row = self._sidebar.currentRow()
+        tab = self._config_tab_indices.get(row)
         if tab is None:
             return
-        tab_name = self._tab_widget.tabText(idx)
+        tab_name = self._sidebar_row_to_label.get(row, "")
         result = QMessageBox.question(
             self,
             "Restore tab defaults",
