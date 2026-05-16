@@ -368,7 +368,9 @@ class SnapshotBrowser(QDialog):
         self._snap_list.clear()
         snap_dir = self._cfg.general.snapshot_dir
         if not snap_dir.exists():
-            self._meta_label.setText(f"No snapshots — {snap_dir} doesn't exist yet.")
+            self._meta_label.setText(
+                "No snapshots yet.\n\nRun an update to create your first one."
+            )
             return
         candidates = sorted(
             (
@@ -380,7 +382,9 @@ class SnapshotBrowser(QDialog):
             reverse=True,
         )
         if not candidates:
-            self._meta_label.setText(f"No snapshots in {snap_dir}.")
+            self._meta_label.setText(
+                "No snapshots yet.\n\nRun an update to create your first one."
+            )
             return
         for snap in candidates:
             ts = _read_timestamp(snap)

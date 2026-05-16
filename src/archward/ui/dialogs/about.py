@@ -54,9 +54,12 @@ class AboutDialog(QDialog):
             "<td><a href='https://aur.archlinux.org/packages/archward'>"
             "aur.archlinux.org/packages/archward</a></td></tr>"
             "</table>"
-            "<p>archward wraps <code>pacman -Syu</code> in a snapshot → "
-            "gate → classify → update → verify pipeline, so a failed "
-            "update is always recoverable.</p>"
+            "<p>archward wraps <code>pacman -Syu</code> in a full pipeline: "
+            "pre-flight → snapshot → gate → classify → update → AUR → "
+            "pacnew → verify → report. Every update is recoverable.</p>"
+            "<p>Features: AUR helper integration, PKGBUILD review, "
+            "snapshot retention, security advisories, Arch News pre-flight, "
+            "hooks, plugins, profiles, and a welcome wizard.</p>"
         )
         body.setOpenExternalLinks(True)
         body.setTextInteractionFlags(
