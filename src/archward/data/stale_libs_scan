@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Scan /proc/*/maps for deleted shared library files still in use by running processes.
+
+Run as root (via sudo) for full coverage of system services. Outputs JSON:
+  [{"unit": "sshd.service", "deleted": ["/usr/lib/libssl.so.3"]}, ...]
+
+Groups results by systemd unit name (from /proc/<pid>/cgroup). Multiple PIDs
+belonging to the same unit are merged into a single entry.
+"""
+import json
+from pathlib import Path
+
+
+def _pid_to_unit(pid: int) -> str:
+    try:
+        for line in Path(f"/proc/{pid}/cgroup").read_text().splitlines():
+            parts = line.split(":", 2)
+            if len(parts) == 3 and parts[2].strip():
+                unit = parts[2].strip().split("/")[-1]
+                if unit:
+                    return unit
+    except OSError:
+        pass
+    return f"pid:{pid}"
+
+
+def _scan_maps(proc_dir: Path) -> dict[str, set]:
+    by_unit: dict[str, set] = {}
+    for pid_dir in sorted(proc_dir.iterdir()):
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            content = (pid_dir / "maps").read_text(errors="replace")
+        except OSError:
+            continue
+        deleted: set[str] = set()
+        for line in content.splitlines():
+            if "(deleted)" not in line:
+                continue
+            parts = line.split(None, 5)
+            if len(parts) < 6:
+                continue
+            path = parts[5].replace(" (deleted)", "").strip()
+            if not path.startswith("/") or ".so" not in path:
+                continue
+            if not (path.startswith("/usr/") or path.startswith("/lib")):
+                continue
+            deleted.add(path)
+        if deleted:
+            unit = _pid_to_unit(int(pid_dir.name))
+            by_unit.setdefault(unit, set()).update(deleted)
+    return by_unit
+
+
+def main() -> None:
+    by_unit = _scan_maps(Path("/proc"))
+    print(json.dumps([
+        {"unit": u, "deleted": sorted(libs)}
+        for u, libs in sorted(by_unit.items())
+    ]))
+
+
+if __name__ == "__main__":
+    main()

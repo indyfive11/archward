@@ -574,6 +574,159 @@ def _orphan_check() -> VerifyCheck:
     )
 
 
+_STALE_LIBS_TIMEOUT_S = 20.0
+
+# Candidate paths for the stale_libs_scan helper (installed → dev tree).
+_SCAN_SCRIPT_CANDIDATES = [
+    Path("/usr/share/archward/stale_libs_scan"),
+    Path(__file__).parent.parent / "data" / "stale_libs_scan",
+]
+
+
+def _parse_cgroup(cgroup_path: Path) -> str | None:
+    """Extract the systemd unit name from a /proc/<pid>/cgroup file."""
+    try:
+        for line in cgroup_path.read_text().splitlines():
+            parts = line.split(":", 2)
+            if len(parts) == 3 and parts[2].strip():
+                unit = parts[2].strip().split("/")[-1]
+                if unit:
+                    return unit
+    except OSError:
+        pass
+    return None
+
+
+def _pid_to_unit(pid: int) -> str:
+    return _parse_cgroup(Path(f"/proc/{pid}/cgroup")) or f"pid:{pid}"
+
+
+def _user_visible_scan(proc_dir: Path = Path("/proc")) -> list[dict]:
+    """Scan processes readable without root. Catches user-session services."""
+    by_unit: dict[str, set] = {}
+    for pid_dir in sorted(proc_dir.iterdir()):
+        if not pid_dir.name.isdigit():
+            continue
+        try:
+            content = (pid_dir / "maps").read_text(errors="replace")
+        except (PermissionError, FileNotFoundError, OSError):
+            continue
+        deleted: set[str] = set()
+        for line in content.splitlines():
+            if "(deleted)" not in line:
+                continue
+            # /proc/<pid>/maps format: addr perms offset dev inode [pathname]
+            # Deleted files have " (deleted)" appended to the pathname.
+            # Split with maxsplit=5 so the pathname field (index 5) is intact.
+            parts = line.split(None, 5)
+            if len(parts) < 6:
+                continue
+            path = parts[5].replace(" (deleted)", "").strip()
+            if not path.startswith("/") or ".so" not in path:
+                continue
+            if not (path.startswith("/usr/") or path.startswith("/lib")):
+                continue
+            deleted.add(path)
+        if deleted:
+            # Read cgroup from the same pid_dir so fake /proc trees work in tests.
+            unit = _parse_cgroup(pid_dir / "cgroup") or f"pid:{pid_dir.name}"
+            by_unit.setdefault(unit, set()).update(deleted)
+    return [{"unit": u, "deleted": sorted(libs)} for u, libs in sorted(by_unit.items())]
+
+
+def _sudo_scan(script: Path) -> list[dict] | None:
+    """Try full scan as root using the helper script via sudo -n.
+
+    Uses the existing sudo timestamp (non-interactive). Returns parsed
+    JSON on success, None if sudo is not available or the script errors.
+    """
+    import json as _json
+    import subprocess
+    import sys
+
+    try:
+        r = subprocess.run(
+            ["sudo", "-n", sys.executable, str(script)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if r.returncode == 0:
+            return _json.loads(r.stdout)
+    except Exception:
+        pass
+    return None
+
+
+def _stale_libs_check(cfg: ConfigModel) -> VerifyCheck:
+    """Detect services running against deleted shared library versions.
+
+    After a package update, long-running processes still map the old .so files
+    from disk (link count drops to 0 but the fd stays open). This check surfaces
+    them so the user knows which services need a restart.
+
+    Tries a full scan via sudo -n (uses the existing sudo timestamp) first.
+    Falls back to user-visible processes (KDE, pipewire, browsers, user units)
+    if the sudoers NOPASSWD entry is absent.
+    """
+    if not cfg.verify.stale_libs:
+        return VerifyCheck(
+            bucket="universal",
+            name="stale-libs",
+            status=CheckStatus.PASS,
+            message="stale library check disabled",
+        )
+
+    script = next((p for p in _SCAN_SCRIPT_CANDIDATES if p.exists()), None)
+    full_coverage = False
+    entries: list[dict] = []
+
+    if script is not None:
+        result = _sudo_scan(script)
+        if result is not None:
+            entries = result
+            full_coverage = True
+
+    if not full_coverage:
+        try:
+            entries = _call_with_timeout(_user_visible_scan, _STALE_LIBS_TIMEOUT_S)
+            if entries is None:
+                entries = []
+        except TimeoutError:
+            log.warning("_stale_libs_check: user-visible scan timed out")
+            return VerifyCheck(
+                bucket="universal",
+                name="stale-libs",
+                status=CheckStatus.WARN,
+                message="stale library scan timed out",
+            )
+
+    if not entries:
+        suffix = "" if full_coverage else " (user-visible processes only)"
+        return VerifyCheck(
+            bucket="universal",
+            name="stale-libs",
+            status=CheckStatus.PASS,
+            message=f"No services running deleted library versions{suffix}",
+        )
+
+    n = len(entries)
+    lines = [f"  {e['unit']}: {', '.join(e['deleted'])}" for e in entries]
+    if not full_coverage:
+        lines.append(
+            "  (system services not scanned — add sudoers entry for full coverage,"
+            " see docs/development.md)"
+        )
+    return VerifyCheck(
+        bucket="universal",
+        name="stale-libs",
+        status=CheckStatus.WARN,
+        message=f"{n} service{'s' if n != 1 else ''} running deleted library versions"
+                " — restart recommended",
+        detail="\n".join(lines),
+    )
+
+
 def _security_advisory_check(cfg: ConfigModel) -> VerifyCheck:
     """Cross-reference installed packages against Arch Security Advisories.
 
@@ -778,6 +931,7 @@ def run_verify(
     checks.append(_disk_check())
     checks.append(_pacman_log_check())
     checks.append(_orphan_check())
+    checks.append(_stale_libs_check(cfg))
     checks.append(_security_advisory_check(cfg))
     reboot = _reboot_log_check(cfg, snapshot_path)
     if reboot is not None:

@@ -160,6 +160,7 @@ def default_config() -> ConfigModel:
         verify=VerifyConfig(
             enabled=True,
             reboot_log="/var/log/reboot-recommendation-trigger.log",
+            stale_libs=False,
         ),
         privilege=PrivilegeConfig(mode="auto", askpass=""),
         hooks=HooksConfig(

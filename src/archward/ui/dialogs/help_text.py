@@ -202,6 +202,16 @@ HELP: dict[tuple[str, str], str] = {
         "(defers to that tool to avoid double-reporting). Disable if you "
         "check security.archlinux.org through another workflow."
     ),
+    ("verify", "stale_libs"): (
+        "When ON, the verify phase scans running processes for deleted shared "
+        "library files (.so) that are still mapped into memory. After a package "
+        "update, long-running services continue using the old library version "
+        "until restarted — this check surfaces which ones need a restart. "
+        "Off by default. For full coverage of system services (sshd, "
+        "NetworkManager, etc.) a NOPASSWD sudoers entry is required; see "
+        "docs/development.md. Without it, only user-visible processes "
+        "(KDE/Plasma, pipewire, browsers) are scanned."
+    ),
 
     # ── Privilege ──────────────────────────────────────────────────────────
     ("privilege", "mode"): (
@@ -338,6 +348,15 @@ HELP: dict[tuple[str, str], str] = {
         "https://security.archlinux.org/ for details and workarounds. "
         "Critical and High severity advisories should be addressed promptly. "
         "If `arch-audit` is installed, it will handle this check instead."
+    ),
+    ("verify_hint", "stale-libs"): (
+        "Restart each listed service to load the updated libraries.\n"
+        "For system services:\n"
+        "  sudo systemctl restart <unit>\n"
+        "For user services (kwin_wayland, pipewire, wireplumber, etc.):\n"
+        "  systemctl --user restart <unit>\n"
+        "Or log out and back in to restart all user-session services at once.\n"
+        "A full reboot resolves all stale-library issues simultaneously."
     ),
 
     # ── Profiles ──────────────────────────────────────────────────────────

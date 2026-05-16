@@ -96,6 +96,7 @@ class VerifyConfig(BaseModel):
     enabled: bool = True
     reboot_log: str = "/var/log/reboot-recommendation-trigger.log"
     security_advisories: bool = True
+    stale_libs: bool = False
 
 
 class PrivilegeConfig(BaseModel):

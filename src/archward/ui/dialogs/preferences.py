@@ -768,24 +768,28 @@ class _VerifyTab(_Tab):
         super().__init__()
         self._enabled = QCheckBox("Enable verify phase")
         self._security_advisories = QCheckBox("Check Arch Security Advisories")
+        self._stale_libs = QCheckBox("Detect stale library versions after update")
         self._reboot_log = QLineEdit()
         self._reboot_log.setPlaceholderText("/var/log/reboot-recommendation-trigger.log")
 
         form = QFormLayout(self)
         form.addRow("", _field_with_help(self._enabled, "verify", "enabled"))
         form.addRow("", _field_with_help(self._security_advisories, "verify", "security_advisories"))
+        form.addRow("", _field_with_help(self._stale_libs, "verify", "stale_libs"))
         form.addRow("Reboot-recommended log:",
                     _field_with_help(self._reboot_log, "verify", "reboot_log"))
 
     def load(self, cfg: ConfigModel) -> None:
         self._enabled.setChecked(cfg.verify.enabled)
         self._security_advisories.setChecked(cfg.verify.security_advisories)
+        self._stale_libs.setChecked(cfg.verify.stale_libs)
         self._reboot_log.setText(cfg.verify.reboot_log)
 
     def dump(self) -> VerifyConfig:
         return VerifyConfig(
             enabled=self._enabled.isChecked(),
             security_advisories=self._security_advisories.isChecked(),
+            stale_libs=self._stale_libs.isChecked(),
             reboot_log=self._reboot_log.text().strip(),
         )
 
