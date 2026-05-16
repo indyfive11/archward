@@ -18,6 +18,11 @@ class SnapshotMeta(BaseModel):
     free_disk_gb: int
     helper_detected: str | None = None
 
+    @property
+    def is_post(self) -> bool:
+        """True when this is a post-update snapshot (name ends with -after)."""
+        return self.snapshot_id.endswith("-after")
+
 
 class Snapshot(BaseModel):
     model_config = ConfigDict(frozen=True)

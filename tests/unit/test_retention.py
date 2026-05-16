@@ -33,13 +33,18 @@ def _make_snap(snap_dir: Path, name: str, mtime: float) -> Path:
     return p
 
 
-def _cfg_with_snap_dir(snap_dir: Path, keep: int):
-    """Mutate a default config to point at tmp + a specific keep_snapshots."""
+def _cfg_with_snap_dir(snap_dir: Path, keep: int, keep_days: int = 0, keep_min: int = 0):
+    """Mutate a default config to point at tmp + specific retention settings.
+
+    keep_days=0 and keep_min=0 disable age-based pruning so existing count-only
+    tests are unaffected by the new fields.
+    """
     cfg = default_config()
-    # ConfigModel is frozen; rebuild general via model_copy.
     new_general = cfg.general.model_copy(update={
         "snapshot_dir": snap_dir,
         "keep_snapshots": keep,
+        "keep_days": keep_days,
+        "keep_min": keep_min,
     })
     return cfg.model_copy(update={"general": new_general})
 
@@ -99,6 +104,92 @@ def test_keep_more_than_existing_is_noop(tmp_path: Path) -> None:
     removed = prune_snapshots(cfg)
     assert removed == []
     assert len(list(snap_dir.iterdir())) == 3
+
+
+# ── Age-based pruning tests ───────────────────────────────────────────────────
+
+def test_age_prune_removes_old(tmp_path: Path) -> None:
+    """A snapshot older than keep_days is deleted by the age pass."""
+    snap_dir = tmp_path / "snapshots"
+    now = time.time()
+    fresh = _make_snap(snap_dir, "snap-fresh", now - 5 * 86400)   # 5 days old
+    old   = _make_snap(snap_dir, "snap-old",   now - 40 * 86400)  # 40 days old
+    # keep_min=0 so the floor doesn't protect snap-old
+    cfg = _cfg_with_snap_dir(snap_dir, keep=10, keep_days=30, keep_min=0)
+
+    removed = prune_snapshots(cfg)
+
+    assert old not in [p for p in snap_dir.iterdir() if p.is_dir()]
+    assert fresh.exists()
+    assert len(removed) == 1
+
+
+def test_age_prune_respects_keep_min_floor(tmp_path: Path) -> None:
+    """The newest keep_min snapshots are protected from age pruning."""
+    snap_dir = tmp_path / "snapshots"
+    now = time.time()
+    snap1 = _make_snap(snap_dir, "snap-1", now - 60 * 86400)  # 60d — oldest
+    snap2 = _make_snap(snap_dir, "snap-2", now - 50 * 86400)  # 50d
+    snap3 = _make_snap(snap_dir, "snap-3", now - 40 * 86400)  # 40d — newest, protected
+    cfg = _cfg_with_snap_dir(snap_dir, keep=10, keep_days=30, keep_min=1)
+
+    removed = prune_snapshots(cfg)
+
+    # snap-3 is the newest → protected by keep_min=1; snap-1 and snap-2 pruned
+    assert snap3.exists()
+    assert not snap1.exists()
+    assert not snap2.exists()
+    assert len(removed) == 2
+
+
+def test_age_prune_disabled_when_keep_days_zero(tmp_path: Path) -> None:
+    """keep_days=0 disables age-based pruning entirely."""
+    snap_dir = tmp_path / "snapshots"
+    now = time.time()
+    old = _make_snap(snap_dir, "snap-old", now - 365 * 86400)  # 1 year old
+    cfg = _cfg_with_snap_dir(snap_dir, keep=10, keep_days=0, keep_min=0)
+
+    removed = prune_snapshots(cfg)
+
+    assert removed == []
+    assert old.exists()
+
+
+def test_age_prune_skipped_on_explicit_keep(tmp_path: Path) -> None:
+    """Passing an explicit keep value skips the age pass (Prune now button)."""
+    snap_dir = tmp_path / "snapshots"
+    now = time.time()
+    old = _make_snap(snap_dir, "snap-old", now - 40 * 86400)
+    cfg = _cfg_with_snap_dir(snap_dir, keep=10, keep_days=30, keep_min=0)
+
+    # Explicit keep — age pass must not fire
+    removed = prune_snapshots(cfg, keep=5)
+
+    assert removed == []
+    assert old.exists()
+
+
+def test_count_cap_and_age_prune_combine(tmp_path: Path) -> None:
+    """Count cap fires first; age prune operates only on the survivors."""
+    snap_dir = tmp_path / "snapshots"
+    now = time.time()
+    # 4 snapshots: 2 fresh, 2 old
+    snap1 = _make_snap(snap_dir, "snap-1", now - 50 * 86400)  # old
+    snap2 = _make_snap(snap_dir, "snap-2", now - 45 * 86400)  # old
+    snap3 = _make_snap(snap_dir, "snap-3", now - 5 * 86400)   # fresh
+    snap4 = _make_snap(snap_dir, "snap-4", now - 2 * 86400)   # fresh (newest)
+    # keep_snapshots=3 → count pass removes snap-1 (oldest)
+    # keep_days=30 → age pass removes snap-2 from survivors [snap-4, snap-3, snap-2]
+    # keep_min=1 → snap-4 (newest) protected, snap-3 and snap-2 subject to age
+    cfg = _cfg_with_snap_dir(snap_dir, keep=3, keep_days=30, keep_min=1)
+
+    removed = prune_snapshots(cfg)
+
+    assert not snap1.exists()  # removed by count cap
+    assert not snap2.exists()  # removed by age prune
+    assert snap3.exists()      # fresh — not over-age
+    assert snap4.exists()      # protected by keep_min floor
+    assert len(removed) == 2
 
 
 def test_dirs_without_timestamp_are_ignored(tmp_path: Path) -> None:

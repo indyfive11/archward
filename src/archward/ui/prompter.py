@@ -27,6 +27,7 @@ import threading
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtWidgets import QMessageBox
 
+from archward.aur.metadata import AurPackageInfo, fetch_aur_info
 from archward.aur.pkgbuild_cache import PkgbuildCache
 from archward.aur.prefetch import fetch_pkgbuild
 from archward.models.gate import GateResult
@@ -262,6 +263,7 @@ class PkgbuildPrompter(QObject):
         self._pkgbuild_cache = PkgbuildCache()
         self._pending_previous: str | None = None
         self._pending_previous_at: float | None = None
+        self._pending_aur_info: AurPackageInfo | None = None
         self._show_modal_requested.connect(
             self._on_show_modal,
             Qt.ConnectionType.BlockingQueuedConnection,
@@ -288,6 +290,7 @@ class PkgbuildPrompter(QObject):
         entry = self._pkgbuild_cache.get(pkg)
         self._pending_previous = entry.content if entry else None
         self._pending_previous_at = entry.approved_at if entry else None
+        self._pending_aur_info = fetch_aur_info(pkg)
 
         # Loop on RETRY (re-fetch the PKGBUILD) until the modal returns a
         # terminal verdict.
@@ -318,6 +321,7 @@ class PkgbuildPrompter(QObject):
             pkg, content,
             previous_content=self._pending_previous,
             previous_approved_at=self._pending_previous_at,
+            aur_info=self._pending_aur_info,
             parent=self._main_window,
         )
         holder.result = dlg.review()

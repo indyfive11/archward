@@ -171,11 +171,17 @@ class _GeneralTab(_Tab):
         log_browse.clicked.connect(lambda: self._browse(self._log_dir))
 
         self._keep_snapshots = QSpinBox()
-        self._keep_snapshots.setRange(1, 100)
+        self._keep_snapshots.setRange(1, 500)
+        self._keep_days = QSpinBox()
+        self._keep_days.setRange(0, 3650)
+        self._keep_days.setSpecialValueText("disabled")
+        self._keep_min = QSpinBox()
+        self._keep_min.setRange(0, 100)
         self._keep_logs = QSpinBox()
         self._keep_logs.setRange(1, 100)
 
         self._notify_on_completion = QCheckBox("Show a desktop notification when the pipeline finishes")
+        self._after_snapshot = QCheckBox("Take a snapshot after a successful verify pass")
 
         snapshot_row = QHBoxLayout()
         snapshot_row.addWidget(self._snapshot_dir, stretch=1)
@@ -186,7 +192,10 @@ class _GeneralTab(_Tab):
 
         form = QFormLayout(self)
         form.addRow("Snapshot directory:", _field_with_help(_wrap(snapshot_row), "general", "snapshot_dir"))
-        form.addRow("Keep N snapshots:", _field_with_help(self._keep_snapshots, "general", "keep_snapshots"))
+        form.addRow("Max snapshots (hard cap):", _field_with_help(self._keep_snapshots, "general", "keep_snapshots"))
+        form.addRow("Prune snapshots older than (days):", _field_with_help(self._keep_days, "general", "keep_days"))
+        form.addRow("Always keep at least:", _field_with_help(self._keep_min, "general", "keep_min"))
+        form.addRow("", _field_with_help(self._after_snapshot, "general", "after_snapshot"))
         form.addRow("Log directory:", _field_with_help(_wrap(log_row), "general", "log_dir"))
         form.addRow("Keep N log files:", _field_with_help(self._keep_logs, "general", "keep_logs"))
         form.addRow("", _field_with_help(self._notify_on_completion, "general", "notify_on_completion"))
@@ -200,14 +209,20 @@ class _GeneralTab(_Tab):
         self._snapshot_dir.setText(str(cfg.general.snapshot_dir))
         self._log_dir.setText(str(cfg.general.log_dir))
         self._keep_snapshots.setValue(cfg.general.keep_snapshots)
+        self._keep_days.setValue(cfg.general.keep_days)
+        self._keep_min.setValue(cfg.general.keep_min)
         self._keep_logs.setValue(cfg.general.keep_logs)
         self._notify_on_completion.setChecked(cfg.general.notify_on_completion)
+        self._after_snapshot.setChecked(cfg.general.after_snapshot)
 
     def dump(self) -> GeneralConfig:
         return GeneralConfig(
             snapshot_dir=Path(self._snapshot_dir.text()),
             log_dir=Path(self._log_dir.text()),
             keep_snapshots=self._keep_snapshots.value(),
+            keep_days=self._keep_days.value(),
+            keep_min=self._keep_min.value(),
+            after_snapshot=self._after_snapshot.isChecked(),
             keep_logs=self._keep_logs.value(),
             notify_on_completion=self._notify_on_completion.isChecked(),
         )
@@ -1836,23 +1851,39 @@ class PreferencesDialog(QDialog):
         # already refreshed its own list, and the dialog has nothing to do.
 
         self._tab_widget = QTabWidget()
+        self._config_tab_indices: dict[int, _Tab] = {}
         for label, tab in zip(labels, self._tabs):
-            self._tab_widget.addTab(tab, label)
+            idx = self._tab_widget.addTab(tab, label)
+            self._config_tab_indices[idx] = tab
         self._tab_widget.addTab(self._cache, "Cache")
         self._tab_widget.addTab(self._profiles, "Profiles")
         self._tab_widget.addTab(self._advanced, "Advanced")
 
-        buttons = QDialogButtonBox(
+        self._restore_tab_btn = QPushButton("Restore tab defaults")
+        restore_all_btn = QPushButton("Restore all defaults")
+        self._restore_tab_btn.clicked.connect(self._on_reset_current_tab)
+        restore_all_btn.clicked.connect(self._on_reset)
+
+        save_cancel = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self._on_save)
-        buttons.rejected.connect(self.reject)
+        save_cancel.accepted.connect(self._on_save)
+        save_cancel.rejected.connect(self.reject)
+
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self._restore_tab_btn)
+        btn_row.addWidget(restore_all_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(save_cancel)
+
+        self._tab_widget.currentChanged.connect(self._on_tab_changed)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._tab_widget)
-        layout.addWidget(buttons)
+        layout.addLayout(btn_row)
 
         self._load_all()
+        self._on_tab_changed(self._tab_widget.currentIndex())
 
     # ── Tab orchestration ─────────────────────────────────────────────────
 
@@ -1991,6 +2022,25 @@ class PreferencesDialog(QDialog):
             return
         self._cfg = default_config()
         self._load_all()
+
+    def _on_tab_changed(self, index: int) -> None:
+        self._restore_tab_btn.setEnabled(index in self._config_tab_indices)
+
+    def _on_reset_current_tab(self) -> None:
+        idx = self._tab_widget.currentIndex()
+        tab = self._config_tab_indices.get(idx)
+        if tab is None:
+            return
+        tab_name = self._tab_widget.tabText(idx)
+        result = QMessageBox.question(
+            self,
+            "Restore tab defaults",
+            f"Reset the '{tab_name}' tab to archward defaults?\n\n"
+            "This does not write to disk until you click Save.",
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        tab.load(default_config())
 
     # ── Profile-tab handlers ──────────────────────────────────────────────
 

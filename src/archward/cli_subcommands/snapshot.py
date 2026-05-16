@@ -53,19 +53,23 @@ def _list_snapshot_paths(snap_dir: Path) -> list[Path]:
 
 def cmd_list(args, config_path: Path | None) -> int:
     cfg = build_config(config_path)
-    paths = _list_snapshot_paths(cfg.general.snapshot_dir)
-    if not paths:
+    all_paths = _list_snapshot_paths(cfg.general.snapshot_dir)
+    if not all_paths:
         print(f"no snapshots in {cfg.general.snapshot_dir}")
         return 0
+
+    # Separate pre- and post-snapshots; list only pre- but annotate paired ones.
+    post_names = {p.name.removesuffix("-after") for p in all_paths if p.name.endswith("-after")}
+    paths = [p for p in all_paths if not p.name.endswith("-after")]
 
     limit = None if args.all else args.limit
     visible = paths if limit is None else paths[:limit]
 
     # Column widths sized to terminal; truncate long kernel-release strings.
     cols = _shutil.get_terminal_size((100, 24)).columns
-    kernel_w = max(12, min(28, cols - 60))
+    kernel_w = max(12, min(28, cols - 68))
 
-    header = f"{'snapshot':22}  {'age':>9}  {'distro':12}  {'kernel':{kernel_w}}  configs"
+    header = f"{'snapshot':22}  {'type':8}  {'age':>9}  {'distro':12}  {'kernel':{kernel_w}}  configs"
     print(header)
     print("-" * min(cols - 1, len(header)))
 
@@ -77,8 +81,10 @@ def cmd_list(args, config_path: Path | None) -> int:
         kernel = snap.meta.kernel_release[:kernel_w] or "unknown"
         distro = (snap.meta.distro_id or "?")[:12]
         n_configs = len(snap.config_files)
+        snap_type = "pre+post" if p.name in post_names else "pre"
         print(
             f"{snap.meta.snapshot_id:22}  "
+            f"{snap_type:8}  "
             f"{_human_age(snap.age_seconds):>9}  "
             f"{distro:12}  "
             f"{kernel:{kernel_w}}  "

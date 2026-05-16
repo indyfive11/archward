@@ -307,17 +307,27 @@ def _capture_pacnew_baseline(snap_root: Path) -> None:
     )
 
 
-def take_snapshot(cfg: ConfigModel, strategy: SudoStrategy, bus: EventBus) -> Snapshot:
+def take_snapshot(
+    cfg: ConfigModel,
+    strategy: SudoStrategy,
+    bus: EventBus,
+    *,
+    snapshot_id: str | None = None,
+) -> Snapshot:
     """Take a full snapshot. Emits PHASE_LOG events along the way.
 
     v0.4.1 (F8): if any gather step raises, the half-populated snapshot
     dir is removed before re-raising. Without this cleanup a partial
     snapshot would leak on disk forever (no `.timestamp` marker means
     retention can't prune it). Snapshot is all-or-nothing.
+
+    v0.4.7: optional keyword-only `snapshot_id` lets callers supply the
+    directory name (e.g. "2026-05-16_103757-after" for a post-snapshot).
     """
     bus.emit_start(PHASE, "Capturing system state")
 
-    snapshot_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    if snapshot_id is None:
+        snapshot_id = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     snap_root = cfg.general.snapshot_dir / snapshot_id
     snap_root.mkdir(parents=True, exist_ok=True)
 

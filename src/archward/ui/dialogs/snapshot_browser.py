@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QProgressDialog,
     QPushButton,
     QSplitter,
@@ -159,6 +160,32 @@ def _capture_status(snap_file: Path, live_path: Path) -> tuple[str, str]:
     )
 
 
+def _package_delta(pre_all: str, post_all: str) -> list[str]:
+    """Return sorted change lines comparing two all.txt package lists.
+
+    Lines format: `<name> <version>` (one per line).
+    Output: `+ name ver` (added), `- name ver` (removed), `~ name old → new` (changed).
+    """
+    def _parse(text: str) -> dict[str, str]:
+        result = {}
+        for line in text.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2:
+                result[parts[0]] = parts[1]
+        return result
+
+    pre = _parse(pre_all)
+    post = _parse(post_all)
+    added = [f"+ {k} {post[k]}" for k in post if k not in pre]
+    removed = [f"- {k} {pre[k]}" for k in pre if k not in post]
+    changed = [
+        f"~ {k} {pre[k]} → {post[k]}"
+        for k in pre
+        if k in post and pre[k] != post[k]
+    ]
+    return sorted(added + removed + changed)
+
+
 class SnapshotBrowser(QDialog):
     """Modal browser over `cfg.general.snapshot_dir`."""
 
@@ -226,6 +253,20 @@ class SnapshotBrowser(QDialog):
         )
         self._bulk_pkgs_btn.clicked.connect(self._on_bulk_apply_packages)
 
+        self._delta_label = QLabel("")
+        self._delta_label.setStyleSheet("font-weight: bold; padding: 8px 8px 4px 8px;")
+        self._delta_label.hide()
+        self._delta_viewer = QPlainTextEdit()
+        self._delta_viewer.setReadOnly(True)
+        self._delta_viewer.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        _mono = QFont("monospace")
+        _mono.setStyleHint(QFont.StyleHint.TypeWriter)
+        self._delta_viewer.setFont(_mono)
+        self._delta_viewer.setMaximumHeight(160)
+        self._delta_viewer.hide()
+        self._delta_view_all_btn = QPushButton()
+        self._delta_view_all_btn.hide()
+
         right_box = QWidget()
         right_layout = QVBoxLayout(right_box)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -236,6 +277,9 @@ class SnapshotBrowser(QDialog):
         right_layout.addWidget(self._pkgs_label)
         right_layout.addWidget(self._pkgs_tree, stretch=1)
         right_layout.addWidget(self._bulk_pkgs_btn)
+        right_layout.addWidget(self._delta_label)
+        right_layout.addWidget(self._delta_viewer)
+        right_layout.addWidget(self._delta_view_all_btn)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._snap_list)
@@ -324,7 +368,11 @@ class SnapshotBrowser(QDialog):
             self._meta_label.setText(f"No snapshots — {snap_dir} doesn't exist yet.")
             return
         candidates = sorted(
-            (p for p in snap_dir.iterdir() if p.is_dir() and (p / ".timestamp").exists()),
+            (
+                p for p in snap_dir.iterdir()
+                if p.is_dir() and (p / ".timestamp").exists()
+                and not p.name.endswith("-after")
+            ),
             key=lambda p: p.name,
             reverse=True,
         )
@@ -423,6 +471,78 @@ class SnapshotBrowser(QDialog):
 
         self._render_configs(snap_path)
         self._render_critical_packages(snap_path)
+        self._render_post_delta(snap_path)
+
+    def _render_post_delta(self, snap_path: Path) -> None:
+        """Show package delta between this pre-snapshot and its -after sibling."""
+        after_path = snap_path.parent / f"{snap_path.name}-after"
+        if not after_path.is_dir():
+            self._delta_label.hide()
+            self._delta_viewer.hide()
+            self._delta_view_all_btn.hide()
+            return
+
+        pre_all = (snap_path / "packages" / "all.txt")
+        post_all = (after_path / "packages" / "all.txt")
+        if not pre_all.exists() or not post_all.exists():
+            self._delta_label.hide()
+            self._delta_viewer.hide()
+            self._delta_view_all_btn.hide()
+            return
+
+        delta = _package_delta(pre_all.read_text(), post_all.read_text())
+        n = len(delta)
+        _CAP = 30
+
+        self._delta_label.setText(
+            f"Post-update delta ({n} package change{'s' if n != 1 else ''}):"
+        )
+        self._delta_label.show()
+
+        self._delta_viewer.setPlainText("\n".join(delta[:_CAP]))
+        self._delta_viewer.show()
+
+        try:
+            self._delta_view_all_btn.clicked.disconnect()
+        except RuntimeError:
+            pass
+        if n > _CAP:
+            self._delta_view_all_btn.setText(f"View all {n} changes…")
+            self._delta_view_all_btn.clicked.connect(
+                lambda: self._on_view_full_delta(snap_path, after_path, delta)
+            )
+            self._delta_view_all_btn.show()
+        else:
+            self._delta_view_all_btn.hide()
+
+    def _on_view_full_delta(self, pre_path: Path, post_path: Path, delta: list[str]) -> None:
+        from archward.ui.dialogs.diff_dialog import _DiffHighlighter
+        import difflib
+        pre_all = (pre_path / "packages" / "all.txt").read_text()
+        post_all = (post_path / "packages" / "all.txt").read_text()
+        diff_text = "".join(difflib.unified_diff(
+            pre_all.splitlines(keepends=True),
+            post_all.splitlines(keepends=True),
+            fromfile=f"pre-snapshot ({pre_path.name})",
+            tofile=f"post-snapshot ({post_path.name})",
+            n=3,
+        ))
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Post-update package diff — {pre_path.name}")
+        dlg.resize(800, 600)
+        view = QPlainTextEdit(dlg)
+        view.setReadOnly(True)
+        view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        font = QFont("monospace"); font.setStyleHint(QFont.StyleHint.TypeWriter)
+        view.setFont(font)
+        view.setPlainText(diff_text or "(no textual differences found)")
+        _DiffHighlighter(view.document())
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(view)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        dlg.exec()
 
     def _render_configs(self, snap_path: Path) -> None:
         self._configs_tree.clear()

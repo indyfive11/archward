@@ -11,7 +11,10 @@ class GeneralConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     snapshot_dir: Path
-    keep_snapshots: int = 10
+    keep_snapshots: int = 40
+    keep_days: int = 120
+    keep_min: int = 2
+    after_snapshot: bool = False
     log_dir: Path
     keep_logs: int = 20
     notify_on_completion: bool = True

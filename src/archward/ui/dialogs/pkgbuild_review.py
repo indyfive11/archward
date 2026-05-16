@@ -3,7 +3,8 @@
 Shown per AUR package when `cfg.pacman.noconfirm=False`. Read-only
 PKGBUILD body + Approve/Reject buttons. When a previously-approved
 PKGBUILD is available, shows a unified diff so malicious additions are
-immediately visible (v0.4.7).
+immediately visible (v0.4.7). AUR maintainer metadata and risk signals
+are surfaced below the header (v0.4.7).
 
 The "fetch failed" state surfaces Skip / Retry / Cancel buttons instead
 of Approve/Reject so the user can decide between dropping the package,
@@ -52,6 +53,50 @@ def _approved_date(approved_at: float | None) -> str:
     return datetime.fromtimestamp(approved_at, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+def _add_metadata_strip(layout: QVBoxLayout, info: object) -> None:
+    """Add AUR metadata strip + risk signal labels below the header.
+
+    `info` is `AurPackageInfo | None`; importing here avoids a Qt-free
+    module pulling in Qt at test time.
+    """
+    from archward.aur.metadata import AurPackageInfo, aur_risk_signals
+    from archward.ui.theme import status_palette
+    if not isinstance(info, AurPackageInfo):
+        return
+
+    _status = status_palette()
+    mod_date = datetime.fromtimestamp(info.last_modified, tz=timezone.utc).strftime("%Y-%m-%d")
+    maintainer_str = info.maintainer if info.maintainer else "— orphaned —"
+    strip = QLabel(
+        f"Maintainer: <b>{maintainer_str}</b> &nbsp;|&nbsp; "
+        f"Votes: <b>{info.num_votes}</b> &nbsp;|&nbsp; "
+        f"Modified: <b>{mod_date}</b>"
+    )
+    strip.setTextFormat(Qt.TextFormat.RichText)
+    strip.setStyleSheet(
+        f"padding: 5px 10px; "
+        f"background: {_status.info_bg}; "
+        f"color: {_status.info_fg};"
+    )
+    layout.addWidget(strip)
+
+    level_styles = {
+        "danger": (_status.danger_bg, _status.danger_fg),
+        "warn": (_status.info_bg, _status.info_fg),
+        "info": (_status.neutral_bg, _status.neutral_fg),
+    }
+    for level, msg in aur_risk_signals(info):
+        bg, fg = level_styles.get(level, (_status.neutral_bg, _status.neutral_fg))
+        lbl = QLabel(f"[!] {msg}" if level == "danger" else f"[{level}] {msg}")
+        lbl.setStyleSheet(
+            f"padding: 4px 10px; "
+            f"background: {bg}; "
+            f"color: {fg}; "
+            f"border-left: 3px solid {fg};"
+        )
+        layout.addWidget(lbl)
+
+
 class PkgbuildReviewDialog(QDialog):
     """Modal — invoke `.review()` and check the returned enum."""
 
@@ -61,6 +106,7 @@ class PkgbuildReviewDialog(QDialog):
         pkgbuild_content: str | None,
         previous_content: str | None = None,
         previous_approved_at: float | None = None,
+        aur_info=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -77,6 +123,7 @@ class PkgbuildReviewDialog(QDialog):
                 "Network issue, missing package, or git timeout."
             )
             layout.addWidget(label)
+            _add_metadata_strip(layout, aur_info)
 
             buttons = QDialogButtonBox()
             skip_btn = QPushButton("Skip this package")
@@ -107,6 +154,7 @@ class PkgbuildReviewDialog(QDialog):
             f"border-left: 3px solid {_brand.accent_border};"
         )
         layout.addWidget(header)
+        _add_metadata_strip(layout, aur_info)
 
         if previous_content is None:
             # First review — no history available. Plain full view.

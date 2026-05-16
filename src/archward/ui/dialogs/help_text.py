@@ -21,9 +21,25 @@ HELP: dict[tuple[str, str], str] = {
         "configs, services, network). Each snapshot is small (~100-500 KB)."
     ),
     ("general", "keep_snapshots"): (
-        "Old snapshots beyond this count are pruned at app exit. 10 covers "
-        "5-10 weeks of bi-weekly updates; raise to 30+ for a longer rollback "
-        "history. Each ~100-500 KB, so disk cost is negligible."
+        "Hard ceiling on total snapshot count — archward never keeps more than "
+        "this many regardless of age. Protects disk when you run updates "
+        "frequently. Raise it if you want more than 10 rollback points available."
+    ),
+    ("general", "keep_days"): (
+        "Delete snapshots older than this many days. 0 disables age-based "
+        "pruning (count-only mode). Pairs with 'always keep at least' so a "
+        "long idle period never leaves you with zero snapshots."
+    ),
+    ("general", "keep_min"): (
+        "Always keep at least this many snapshots regardless of age. Protects "
+        "against the 'came back from vacation and everything is gone' failure "
+        "mode. 2 means you always have the last two runs to fall back on."
+    ),
+    ("general", "after_snapshot"): (
+        "After a clean verify pass, take a second snapshot of the post-update "
+        "state. Paired pre+post snapshots let you see exactly which packages "
+        "changed, and give you a 'known-good post-update' baseline you can "
+        "compare against or roll back from."
     ),
     ("general", "log_dir"): (
         "Where the rotating archward log file lives. Useful when debugging a "

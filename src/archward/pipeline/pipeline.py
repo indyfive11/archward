@@ -351,6 +351,16 @@ def run_pipeline(
         )
         result.post_hook_results = tuple(post_outcome.results)
 
+    # ── After-snapshot ──────────────────────────────────────────────────────
+    # Optional post-update snapshot taken after a clean verify pass.
+    # Pairs with the pre-snapshot as a "known-good post-update baseline".
+    if cfg.general.after_snapshot and result.verify is not None and result.verify.fail_count == 0:
+        after_id = f"{snapshot.meta.snapshot_id}-after"
+        try:
+            snapshot_phase.take_snapshot(cfg, strategy, bus, snapshot_id=after_id)
+        except Exception:  # noqa: BLE001
+            log.exception("after-snapshot failed; non-fatal")
+
     # ── Snapshot retention ──────────────────────────────────────────────────
     # Honor cfg.general.keep_snapshots — wired in v0.4.0 (F6). Failures here
     # are non-fatal: the run is otherwise complete.
