@@ -24,7 +24,9 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
@@ -171,6 +173,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"Archward — profile: {config_path.stem}")
         else:
             self.setWindowTitle("Archward")
+        self.setMinimumSize(900, 600)
         self.resize(1200, 800)
 
         # Persist the active profile path so the next launch (without
@@ -226,10 +229,30 @@ class MainWindow(QMainWindow):
         self._log = LogPane()
         self._result_banner = ResultBanner()
 
+        # Log pane header: "Log" label + flat Clear button.
+        log_header_label = QLabel("Log")
+        log_header_label.setStyleSheet("font-weight: bold;")
+        log_clear_btn = QPushButton("Clear")
+        log_clear_btn.setFlat(True)
+        log_clear_btn.setFixedHeight(20)
+        log_clear_btn.clicked.connect(self._log.clear_log)
+        log_header = QWidget()
+        log_header_layout = QHBoxLayout(log_header)
+        log_header_layout.setContentsMargins(4, 2, 4, 2)
+        log_header_layout.addWidget(log_header_label)
+        log_header_layout.addStretch(1)
+        log_header_layout.addWidget(log_clear_btn)
+        log_container = QWidget()
+        log_container_layout = QVBoxLayout(log_container)
+        log_container_layout.setContentsMargins(0, 0, 0, 0)
+        log_container_layout.setSpacing(0)
+        log_container_layout.addWidget(log_header)
+        log_container_layout.addWidget(self._log)
+
         # Vertical splitter: stacked-view (top) + log (bottom, collapsible).
         right_split = QSplitter(Qt.Orientation.Vertical)
         right_split.addWidget(self._stack)
-        right_split.addWidget(self._log)
+        right_split.addWidget(log_container)
         right_split.setStretchFactor(0, 3)
         right_split.setStretchFactor(1, 1)
         right_split.setSizes([550, 180])
@@ -275,12 +298,14 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         self._dry_btn = QPushButton("Run Dry-Run")
+        self._dry_btn.setToolTip("Run Dry-Run (Ctrl+D)")
         self._dry_btn.clicked.connect(lambda: self._start_run(Mode.DRY_RUN))
         toolbar.addWidget(self._dry_btn)
 
         self._update_btn = QPushButton("Run Update")
         self._update_btn.setToolTip(
-            "Run pacman -Syu and the AUR phase. HIGH RISK packages will prompt for confirmation."
+            "Run pacman -Syu and the AUR phase (F5). "
+            "HIGH RISK packages will prompt for confirmation."
         )
         self._update_btn.clicked.connect(lambda: self._start_run(Mode.INTERACTIVE))
         toolbar.addWidget(self._update_btn)
@@ -289,12 +314,13 @@ class MainWindow(QMainWindow):
         self._snap_btn = QPushButton("Snapshot Browser…")
         self._snap_btn.setToolTip(
             "Browse past snapshots; restore individual configs or downgrade "
-            "specific packages from /var/cache/pacman/pkg/."
+            "specific packages from /var/cache/pacman/pkg/ (Ctrl+B)."
         )
         self._snap_btn.clicked.connect(self._open_snapshot_browser)
         toolbar.addWidget(self._snap_btn)
 
         self._prefs_btn = QPushButton("Preferences…")
+        self._prefs_btn.setToolTip("Open Preferences (Ctrl+,)")
         self._prefs_btn.clicked.connect(self._open_preferences)
         toolbar.addWidget(self._prefs_btn)
 
@@ -302,14 +328,24 @@ class MainWindow(QMainWindow):
         distro = detect_distro()
         toolbar.addWidget(QLabel(f"  Distro: {distro.pretty_name}  "))
 
-        # Spacer pushes the About button to the far right of the toolbar.
+        # Spacer — right-aligns any future toolbar widgets.
         _spacer = QWidget()
         _spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(_spacer)
-        self._about_btn = QPushButton("About")
-        self._about_btn.setToolTip("Version, license, project links.")
-        self._about_btn.clicked.connect(self._open_about)
-        toolbar.addWidget(self._about_btn)
+
+        # ── Help menu ──────────────────────────────────────────────────────
+        help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction("Setup Wizard…", self._open_welcome_wizard)
+        help_menu.addSeparator()
+        help_menu.addAction("About archward", self._open_about)
+
+        # ── Keyboard shortcuts ─────────────────────────────────────────────
+        QShortcut(QKeySequence("F5"),     self).activated.connect(
+            lambda: self._start_run(Mode.INTERACTIVE))
+        QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(
+            lambda: self._start_run(Mode.DRY_RUN))
+        QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(self._open_preferences)
+        QShortcut(QKeySequence("Ctrl+B"), self).activated.connect(self._open_snapshot_browser)
 
         # ── Status bar ─────────────────────────────────────────────────────
         self._status = QStatusBar()
@@ -575,6 +611,13 @@ class MainWindow(QMainWindow):
         dlg = SnapshotBrowser(self.cfg, self.strategy, self.bus, parent=self)
         dlg.exec()
 
+    def _open_welcome_wizard(self) -> None:
+        from archward.ui.dialogs.welcome_wizard import WelcomeWizard
+        from PySide6.QtWidgets import QDialog
+        wiz = WelcomeWizard(parent=self)
+        if wiz.exec() == QDialog.DialogCode.Accepted and wiz.result_path:
+            self._on_profile_switch_requested(wiz.result_path, dialog=None)
+
     def _open_about(self) -> None:
         from archward.ui.dialogs.about import AboutDialog
         AboutDialog(parent=self).exec()
@@ -635,7 +678,8 @@ class MainWindow(QMainWindow):
             set_last_used_profile_path(new_path)
         # Refresh the still-open Preferences dialog so its widgets reflect
         # the newly-active profile without the user having to close + reopen.
-        dialog.apply_profile_switch(self.cfg, new_path)
+        if dialog is not None:
+            dialog.apply_profile_switch(self.cfg, new_path)
 
     # ── Window lifecycle ───────────────────────────────────────────────────
 
