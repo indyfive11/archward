@@ -155,6 +155,21 @@ def _pacnew_check(cfg: ConfigModel, snapshot_path: Path) -> VerifyCheck:
     )
 
 
+def _aur_helper_cache_roots() -> list[Path]:
+    """Return existing cache root dirs for known AUR helpers.
+
+    AUR packages built by yay/paru are stored in the helper's own cache
+    directory, not in pacman's CacheDir — so the standard pacman cache scan
+    misses them entirely.  Layout (one subdirectory per package):
+      yay:  $XDG_CACHE_HOME/yay/<pkg>/*.pkg.tar.*
+      paru: $XDG_CACHE_HOME/paru/clone/<pkg>/*.pkg.tar.*
+    """
+    import os
+    xdg_cache = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache"))
+    candidates = [xdg_cache / "yay", xdg_cache / "paru" / "clone"]
+    return [p for p in candidates if p.is_dir()]
+
+
 def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
     """Did this update's rollback substrate survive the transaction?
 
@@ -166,11 +181,10 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
 
     We compare the snapshot's recorded package versions against what's
     installed now and, for everything that changed, check the pacman
-    cache for the *old* file. If the pre-update files are gone, the
-    safety net failed for this run — that is a verification FAIL (the
-    update may have installed fine, but archward's job is the safe,
-    recoverable update, and that did not hold). The v0.4.0 "What to
-    do?" button surfaces the archive.archlinux.org remediation.
+    cache AND the AUR helper caches for the *old* file. If the pre-update
+    files are gone from all of them, the safety net failed for this run.
+    The v0.4.0 "What to do?" button surfaces the archive.archlinux.org
+    remediation.
     """
     from archward.system import cache_policy as cp
 
@@ -209,16 +223,28 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
             message="no package versions changed since snapshot",
         )
 
-    # Honour pacman.conf CacheDir (it can be relocated / multiple) —
-    # scanning only the hard-coded default would report every package
-    # as un-rollbackable on a moved cache.
+    # Pacman cache (official packages; flat layout: one .pkg.tar.* per file).
+    # Honour pacman.conf CacheDir — it can be relocated or multiple.
     cache_dirs = cp.read_cache_dirs()
+    # AUR helper caches (yay/paru): one subdirectory per package, files inside.
+    aur_roots = _aur_helper_cache_roots()
+    all_scanned = list(cache_dirs) + aur_roots
 
     def _scan() -> set[str]:
         names: set[str] = set()
         for d in cache_dirs:
             try:
                 names.update(p.name for p in d.iterdir() if p.is_file())
+            except OSError:
+                continue
+        for root in aur_roots:
+            try:
+                for pkg_dir in root.iterdir():
+                    if pkg_dir.is_dir():
+                        names.update(
+                            p.name for p in pkg_dir.iterdir()
+                            if p.is_file() and ".pkg.tar." in p.name
+                        )
             except OSError:
                 continue
         return names
@@ -236,7 +262,7 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
             status=CheckStatus.PASS,
             message=(
                 "cache scan failed/timed out — rollback-cache skipped "
-                f"(checked: {', '.join(str(d) for d in cache_dirs)})"
+                f"(checked: {', '.join(str(d) for d in all_scanned)})"
             ),
         )
 
@@ -266,8 +292,8 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
         "ran during this update — that is what removed them. Remove the "
         "hook so future updates stay recoverable."
         if hooks
-        else "The pacman cache no longer holds these versions (paccache, a "
-        "manual pacman -Sc, or a low keep-count pruned them)."
+        else "The pre-update package files are no longer in any cache "
+        "(paccache, a manual pacman -Sc, or yay/paru cache pruning removed them)."
     )
     shown = ", ".join(missing[:20]) + (" …" if len(missing) > 20 else "")
     return VerifyCheck(
@@ -280,7 +306,7 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
         ),
         detail=(
             "archward's downgrade path needs the old .pkg.tar.* in "
-            f"{', '.join(str(d) for d in cache_dirs)}. {cause} "
+            f"{', '.join(str(d) for d in all_scanned)}. {cause} "
             f"Affected: {shown}"
         ),
     )
