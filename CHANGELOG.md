@@ -6,6 +6,54 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-05-16
+
+**AUR metadata, after-snapshot, date-based retention, preferences reset.**
+Four quality-of-life features shipped together: PKGBUILD review now surfaces
+AUR maintainer provenance and risk signals; a paired post-update snapshot can
+be taken after a clean verify pass; snapshot retention gains a date-based
+age prune alongside the existing count cap; and per-tab reset buttons make
+it easy to restore any section of Preferences to defaults without touching
+the rest.
+
+### Added
+
+- **AUR maintainer metadata in PKGBUILD review (F1).** New `archward.aur.metadata`
+  module fetches package info from AUR RPC v5 (maintainer, votes, last modified,
+  out-of-date flag) and surfaces risk signals — danger (orphaned, out-of-date),
+  warn (modified < 7 days ago), info (< 5 votes) — as a colour-coded strip
+  at the top of each PKGBUILD review modal. Fetch runs on the worker thread
+  so the UI is never blocked.
+
+- **After-snapshot (F2).** New `general.after_snapshot` config flag (default
+  `false`). When enabled and the verify phase passes with zero failures, a
+  second snapshot is captured immediately after the update and named
+  `<id>-after`. Paired pre+post snapshots appear in the snapshot browser
+  with a package-delta section (`+` added / `-` removed / `~` changed,
+  capped at 30 rows inline with a "View all" diff dialog). Retention pruning
+  deletes paired siblings together.
+
+- **Date-based snapshot retention (F3).** Two new `[general]` config fields:
+  `keep_days` (default 120) — delete snapshots whose `.timestamp` predates
+  this many days; `keep_min` (default 2) — always spare the newest N
+  snapshots regardless of age. Age pruning is a second pass after the hard
+  count cap and is skipped when `prune_snapshots()` is called with an
+  explicit count (the "Prune now…" button). `keep_snapshots` default raised
+  from 10 → 40.
+
+- **Per-tab and full reset buttons in Preferences (F4).** Main dialog button
+  row now shows `[Restore tab defaults]` and `[Restore all defaults]` to the
+  left of Save / Cancel. Restore tab defaults resets only the active config
+  tab to hard-coded defaults; the button is disabled when a non-config tab
+  (Cache, Profiles, Advanced) is active. Restore all defaults is the
+  existing full-reset action, now discoverable without opening the Advanced
+  tab.
+
+### Changed
+
+- `keep_snapshots` default raised 4× (10 → 40) and `keep_days` default set
+  to 120 to give a meaningful out-of-the-box retention window.
+
 ## [0.4.6] — 2026-05-15
 
 **AUR build quarantine — chronically broken packages skip themselves.**

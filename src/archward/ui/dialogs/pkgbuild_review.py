@@ -86,8 +86,9 @@ def _add_metadata_strip(layout: QVBoxLayout, info: object) -> None:
         "info": (_status.neutral_bg, _status.neutral_fg),
     }
     for level, msg in aur_risk_signals(info):
-        bg, fg = level_styles.get(level, (_status.neutral_bg, _status.neutral_fg))
-        lbl = QLabel(f"[!] {msg}" if level == "danger" else f"[{level}] {msg}")
+        bg, fg = level_styles[level]
+        prefix = "[!]" if level == "danger" else f"[{level}]"
+        lbl = QLabel(f"{prefix} {msg}")
         lbl.setStyleSheet(
             f"padding: 4px 10px; "
             f"background: {bg}; "

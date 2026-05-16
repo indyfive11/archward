@@ -18,6 +18,7 @@ for v0.2.1 — the data model here is shaped so v0.2.1 is just iteration.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import shutil
 import subprocess
@@ -67,10 +68,12 @@ from archward.pipeline.rollback import (
 from archward.pipeline.retention import prune_snapshots
 from archward.pipeline.snapshot import take_snapshot
 from archward.privilege.sudo import SudoStrategy
-from archward.ui.dialogs.diff_dialog import DiffDialog
+from archward.ui.dialogs.diff_dialog import DiffDialog, TextDiffDialog
 from archward.ui.theme import status_palette
 
 log = logging.getLogger(__name__)
+
+_DELTA_CAP = 30  # rows shown inline before "View all" button appears
 
 
 def _read_timestamp(snap_dir: Path) -> datetime | None:
@@ -473,76 +476,63 @@ class SnapshotBrowser(QDialog):
         self._render_critical_packages(snap_path)
         self._render_post_delta(snap_path)
 
+    def _hide_delta(self) -> None:
+        self._delta_label.hide()
+        self._delta_viewer.hide()
+        self._delta_view_all_btn.hide()
+
     def _render_post_delta(self, snap_path: Path) -> None:
         """Show package delta between this pre-snapshot and its -after sibling."""
         after_path = snap_path.parent / f"{snap_path.name}-after"
         if not after_path.is_dir():
-            self._delta_label.hide()
-            self._delta_viewer.hide()
-            self._delta_view_all_btn.hide()
+            self._hide_delta()
             return
 
-        pre_all = (snap_path / "packages" / "all.txt")
-        post_all = (after_path / "packages" / "all.txt")
-        if not pre_all.exists() or not post_all.exists():
-            self._delta_label.hide()
-            self._delta_viewer.hide()
-            self._delta_view_all_btn.hide()
+        pre_all_path = snap_path / "packages" / "all.txt"
+        post_all_path = after_path / "packages" / "all.txt"
+        if not pre_all_path.exists() or not post_all_path.exists():
+            self._hide_delta()
             return
 
-        delta = _package_delta(pre_all.read_text(), post_all.read_text())
+        pre_text = pre_all_path.read_text()
+        post_text = post_all_path.read_text()
+        delta = _package_delta(pre_text, post_text)
         n = len(delta)
-        _CAP = 30
 
         self._delta_label.setText(
             f"Post-update delta ({n} package change{'s' if n != 1 else ''}):"
         )
         self._delta_label.show()
-
-        self._delta_viewer.setPlainText("\n".join(delta[:_CAP]))
+        self._delta_viewer.setPlainText("\n".join(delta[:_DELTA_CAP]))
         self._delta_viewer.show()
 
         try:
             self._delta_view_all_btn.clicked.disconnect()
         except RuntimeError:
             pass
-        if n > _CAP:
+        if n > _DELTA_CAP:
+            diff_text = "".join(difflib.unified_diff(
+                pre_text.splitlines(keepends=True),
+                post_text.splitlines(keepends=True),
+                fromfile=f"pre-snapshot ({snap_path.name})",
+                tofile=f"post-snapshot ({after_path.name})",
+                n=3,
+            ))
             self._delta_view_all_btn.setText(f"View all {n} changes…")
             self._delta_view_all_btn.clicked.connect(
-                lambda: self._on_view_full_delta(snap_path, after_path, delta)
+                lambda: self._on_view_full_delta(diff_text, snap_path.name)
             )
             self._delta_view_all_btn.show()
         else:
             self._delta_view_all_btn.hide()
 
-    def _on_view_full_delta(self, pre_path: Path, post_path: Path, delta: list[str]) -> None:
-        from archward.ui.dialogs.diff_dialog import _DiffHighlighter
-        import difflib
-        pre_all = (pre_path / "packages" / "all.txt").read_text()
-        post_all = (post_path / "packages" / "all.txt").read_text()
-        diff_text = "".join(difflib.unified_diff(
-            pre_all.splitlines(keepends=True),
-            post_all.splitlines(keepends=True),
-            fromfile=f"pre-snapshot ({pre_path.name})",
-            tofile=f"post-snapshot ({post_path.name})",
-            n=3,
-        ))
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"Post-update package diff — {pre_path.name}")
-        dlg.resize(800, 600)
-        view = QPlainTextEdit(dlg)
-        view.setReadOnly(True)
-        view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        font = QFont("monospace"); font.setStyleHint(QFont.StyleHint.TypeWriter)
-        view.setFont(font)
-        view.setPlainText(diff_text or "(no textual differences found)")
-        _DiffHighlighter(view.document())
-        layout = QVBoxLayout(dlg)
-        layout.addWidget(view)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(dlg.reject)
-        layout.addWidget(buttons)
-        dlg.exec()
+    def _on_view_full_delta(self, diff_text: str, snap_name: str) -> None:
+        TextDiffDialog(
+            diff_text=diff_text,
+            title=f"Post-update package diff — {snap_name}",
+            header_html=f"<b>{snap_name}</b> → <b>{snap_name}-after</b>",
+            parent=self,
+        ).exec()
 
     def _render_configs(self, snap_path: Path) -> None:
         self._configs_tree.clear()

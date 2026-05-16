@@ -1,6 +1,6 @@
 # Maintainer: indyfive11 <203553604+indyfive11@users.noreply.github.com>
 pkgname=archward
-pkgver=0.4.6
+pkgver=0.4.7
 pkgrel=1
 pkgdesc="Safe-update GUI for Arch-based Linux distributions"
 arch=('any')
