@@ -27,6 +27,7 @@ import threading
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtWidgets import QMessageBox
 
+from archward.aur.pkgbuild_cache import PkgbuildCache
 from archward.aur.prefetch import fetch_pkgbuild
 from archward.models.gate import GateResult
 from archward.models.update import PendingUpdate
@@ -258,6 +259,9 @@ class PkgbuildPrompter(QObject):
         super().__init__(main_window)
         self._main_window = main_window
         self._cancel_all = False
+        self._pkgbuild_cache = PkgbuildCache()
+        self._pending_previous: str | None = None
+        self._pending_previous_at: float | None = None
         self._show_modal_requested.connect(
             self._on_show_modal,
             Qt.ConnectionType.BlockingQueuedConnection,
@@ -266,6 +270,7 @@ class PkgbuildPrompter(QObject):
     def reset(self) -> None:
         """Call before each AUR phase so a prior CANCEL_ALL doesn't leak."""
         self._cancel_all = False
+        self._pkgbuild_cache.load()
 
     def review(self, pkg: str) -> bool:
         """Worker-thread: fetch + review one PKGBUILD. Returns True on approve.
@@ -280,6 +285,10 @@ class PkgbuildPrompter(QObject):
             log.warning("PkgbuildPrompter.review called on main thread; auto-rejecting")
             return False
 
+        entry = self._pkgbuild_cache.get(pkg)
+        self._pending_previous = entry.content if entry else None
+        self._pending_previous_at = entry.approved_at if entry else None
+
         # Loop on RETRY (re-fetch the PKGBUILD) until the modal returns a
         # terminal verdict.
         while True:
@@ -288,6 +297,9 @@ class PkgbuildPrompter(QObject):
             self._show_modal_requested.emit(pkg, content, holder)
             verdict = holder.result
             if verdict is PkgbuildReviewResult.APPROVE:
+                if content is not None:
+                    self._pkgbuild_cache.store(pkg, content)
+                    self._pkgbuild_cache.save()
                 return True
             if verdict is PkgbuildReviewResult.REJECT:
                 return False
@@ -302,5 +314,10 @@ class PkgbuildPrompter(QObject):
     @Slot(object, object, object)
     def _on_show_modal(self, pkg: str, content: str | None, holder) -> None:
         """Main-thread slot. Show modal, write the result enum into holder."""
-        dlg = PkgbuildReviewDialog(pkg, content, parent=self._main_window)
+        dlg = PkgbuildReviewDialog(
+            pkg, content,
+            previous_content=self._pending_previous,
+            previous_approved_at=self._pending_previous_at,
+            parent=self._main_window,
+        )
         holder.result = dlg.review()
