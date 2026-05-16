@@ -7,7 +7,7 @@ clicks via the internal _on_* slots, and verifies the result enum.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QTabWidget
 
 from archward.ui.dialogs.pkgbuild_review import (
     PkgbuildReviewDialog,
@@ -53,3 +53,32 @@ def test_fetch_failed_branch_skip_yields_reject(qapp) -> None:
     dlg = PkgbuildReviewDialog("ghost", None)
     dlg._on_reject()
     assert dlg._result is PkgbuildReviewResult.REJECT
+
+
+def test_dialog_no_previous_has_no_tabs(qapp) -> None:
+    """First review (no cache entry): plain view, no QTabWidget."""
+    dlg = PkgbuildReviewDialog("foo", "pkgname=foo\n", previous_content=None)
+    assert dlg.findChild(QTabWidget) is None
+
+
+def test_dialog_changed_content_has_tabs(qapp) -> None:
+    """Changed PKGBUILD: QTabWidget with 'Changes' as the first tab."""
+    dlg = PkgbuildReviewDialog(
+        "foo",
+        "pkgname=foo\npkgver=2.0\n",
+        previous_content="pkgname=foo\npkgver=1.0\n",
+    )
+    tabs = dlg.findChild(QTabWidget)
+    assert tabs is not None
+    assert tabs.tabText(0) == "Changes"
+    assert tabs.tabText(1) == "Full PKGBUILD"
+    assert tabs.currentIndex() == 0
+
+
+def test_dialog_identical_content_no_tabs(qapp) -> None:
+    """Identical PKGBUILD: no tabs, 'No changes' banner present."""
+    content = "pkgname=foo\npkgver=1.0\n"
+    dlg = PkgbuildReviewDialog("foo", content, previous_content=content)
+    assert dlg.findChild(QTabWidget) is None
+    labels = dlg.findChildren(QLabel)
+    assert any("No changes" in lbl.text() for lbl in labels)
