@@ -6,6 +6,52 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-05-16
+
+**Welcome wizard, Preferences sidebar, Help menu, keyboard shortcuts, GUI polish.**
+First-run experience gets a 6-page setup wizard that detects the system and
+creates a named profile. Preferences navigation switches from a flat tab bar
+to a categorised sidebar. A Help menu replaces the old About button and exposes
+the wizard for re-use. Four keyboard shortcuts, a log-pane Clear button, and
+assorted empty-state improvements round out the polish pass.
+
+### Added
+
+- **Welcome wizard (F3).** New `WelcomeWizard` 6-page `QDialog` shown automatically
+  on first launch (no prior profile) and re-accessible via Help → Setup Wizard….
+  Pages: Welcome, Profile name (validated), System detection (optional, uses
+  `run_full_detection()`), Key preferences (AUR, PKGBUILD review, after-snapshot,
+  notifications), Snapshot retention (presets + custom), Summary. On Finish writes
+  the named profile to disk and switches the main window to it. Completion flag
+  stored in `~/.config/archward/archward.conf` via `wizard/completed` QSettings key.
+
+- **Help menu (F1).** `QMenuBar` added to `MainWindow`; Help menu contains
+  "Setup Wizard…" and "About archward". Replaces the old toolbar About button.
+
+- **Keyboard shortcuts (F2).** F5 → Run Update, Ctrl+D → Dry Run,
+  Ctrl+, → Preferences, Ctrl+B → Snapshot Browser. Toolbar tooltips updated
+  with shortcut hints.
+
+- **Log pane Clear button (F5).** Thin header bar above the log pane with a
+  flat "Clear" button; clears without closing or resizing the pane.
+
+### Changed
+
+- **Preferences sidebar navigation (F4).** `QTabWidget` replaced with a
+  `QListWidget` sidebar (175 px) + `QStackedWidget`. Tabs reorganised into
+  four labelled groups: Workflow (General, Gates), Packages (AUR, Pacman,
+  Pacnew), Safety (Risk, Verify, Privilege), System (Services, Hooks), plus
+  Profiles, Cache, Advanced. All tab content is unchanged.
+
+- **About dialog description** updated to cover the full v0.4.x pipeline and
+  feature set.
+
+- **Snapshot browser empty-state** message changed from a bare path string to
+  "No snapshots yet. Run an update to create your first one."
+
+- **Main window minimum size** set to 900×600 to prevent layout collapse on
+  small displays.
+
 ## [0.4.7] — 2026-05-16
 
 **AUR metadata, after-snapshot, date-based retention, preferences reset.**
