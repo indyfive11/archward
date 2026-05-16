@@ -102,6 +102,7 @@ def _run_pipe(
 ) -> tuple[int, list[str]]:
     proc = subprocess.Popen(
         full,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=1,

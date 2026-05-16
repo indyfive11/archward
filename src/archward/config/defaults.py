@@ -151,6 +151,10 @@ def default_config() -> ConfigModel:
             enabled=True,  # Phase 3 — AUR enabled by default
             helper_preference=("yay", "paru", "aurutils"),
             skip=False,
+            quarantine_enabled=True,
+            quarantine_min_failures=3,
+            quarantine_initial_days=7,
+            quarantine_max_days=28,
         ),
         pacman=PacmanConfig(noconfirm=True, extra_args=()),
         verify=VerifyConfig(

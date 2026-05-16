@@ -56,6 +56,14 @@ HELP: dict[tuple[str, str], str] = {
         "Off = strict; the update refuses to run. On = you'll be prompted to "
         "proceed anyway in the CLI / a dialog in the GUI."
     ),
+    ("gates", "skip_news_check"): (
+        "Skip the Arch News pre-flight check. When OFF (default), archward "
+        "fetches archlinux.org/news/ before each update and warns if items "
+        "were posted since your last run — these announcements often contain "
+        "manual steps required before or after an update (e.g. NVIDIA driver "
+        "drops, major ABI changes, AUR malware disclosures). Enable this only "
+        "if you monitor Arch News through another channel."
+    ),
 
     # ── Risk ───────────────────────────────────────────────────────────────
     ("risk", "_section"): (
@@ -137,6 +145,29 @@ HELP: dict[tuple[str, str], str] = {
         "`yay` (broadest install base), `paru` (more actively maintained), "
         "`aurutils` (best-effort; requires chroot setup)."
     ),
+    ("aur", "quarantine_enabled"): (
+        "When checked, packages that fail to build repeatedly are quarantined "
+        "and skipped for a configurable window. Quarantine is version-aware — "
+        "a new upstream version clears it automatically. Disable only if you "
+        "prefer to manage failing AUR packages entirely by hand."
+    ),
+    ("aur", "quarantine_min_failures"): (
+        "How many distinct build failures (spaced at least 24 h apart) before "
+        "a package is quarantined. Default 3 ≈ three separate update attempts. "
+        "Lower to quarantine sooner; raise if you want to give flaky packages "
+        "more chances before skipping them."
+    ),
+    ("aur", "quarantine_initial_days"): (
+        "Days to skip a quarantined package before retrying it. After the "
+        "window opens archward tries the build once — success clears "
+        "quarantine; failure doubles the window (up to the maximum)."
+    ),
+    ("aur", "quarantine_max_days"): (
+        "Upper bound on the retry window. A permanently broken PKGBUILD will "
+        "never wait longer than this between retries. 28 days is a good "
+        "balance: long enough to reduce noise, short enough to catch a fix "
+        "within a month."
+    ),
 
     # ── Pacman ─────────────────────────────────────────────────────────────
     ("pacman", "noconfirm"): (
@@ -162,6 +193,14 @@ HELP: dict[tuple[str, str], str] = {
         "is newer than the snapshot timestamp. EndeavorOS ships "
         "`eos-reboot-required` which writes here; on other distros, clear "
         "this to disable the check."
+    ),
+    ("verify", "security_advisories"): (
+        "When ON (default), the verify phase fetches the Arch Security "
+        "Advisory feed and warns if any installed packages have open CVEs. "
+        "Critical and High advisories produce a FAIL row; Medium and Low "
+        "produce a WARN. Automatically skips if `arch-audit` is installed "
+        "(defers to that tool to avoid double-reporting). Disable if you "
+        "check security.archlinux.org through another workflow."
     ),
 
     # ── Privilege ──────────────────────────────────────────────────────────
@@ -285,6 +324,20 @@ HELP: dict[tuple[str, str], str] = {
         "Pull the old version from https://archive.archlinux.org/ and "
         "`sudo pacman -U` it, or adjust the policy in Preferences → Cache "
         "so this doesn't happen next time."
+    ),
+    ("verify_hint", "orphans"): (
+        "These packages were installed as dependencies but nothing currently "
+        "requires them. Review each one with `pacman -Qi <pkg>` — if you're "
+        "not using it, remove it with `sudo pacman -Rns <pkg>` (or remove "
+        "multiple at once). Some orphans are intentional (e.g. a standalone "
+        "tool with no reverse deps); leave them if they're wanted."
+    ),
+    ("verify_hint", "security_advisories"): (
+        "Open security advisories remain unpatched on your system. Run "
+        "`pacman -Syu` to pull available fixes, or see "
+        "https://security.archlinux.org/ for details and workarounds. "
+        "Critical and High severity advisories should be addressed promptly. "
+        "If `arch-audit` is installed, it will handle this check instead."
     ),
 
     # ── Profiles ──────────────────────────────────────────────────────────

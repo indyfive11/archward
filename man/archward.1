@@ -1,6 +1,6 @@
 .\" archward(1) manual page
 .\" Keep in sync with docs/cli.md and docs/recovery.md.
-.TH ARCHWARD 1 "2026-05-15" "archward 0.4.3" "User Commands"
+.TH ARCHWARD 1 "2026-05-15" "archward 0.4.5" "User Commands"
 .SH NAME
 archward \- safe-update pipeline and recovery toolset for Arch-based Linux
 .SH SYNOPSIS
@@ -97,18 +97,32 @@ snapshot.
 .PP
 Runs every built-in check plus all discovered verify plugins (the
 .B archward.verify_checks
-entry-point group). Built-in checks include
+entry-point group). Built-in universal checks include
 .B rollback\-cache
 (FAIL if a cache-cleaning hook or aggressive paccache policy deleted
-the pre-update package files archward's downgrade path needs) and
+the pre-update package files archward's downgrade path needs),
 .B boot\-integrity
 (FAIL if an initramfs is older than its kernel \(em the
 mkinitcpio/dracut pacman hook did not run and the machine may not
 boot; grub.cfg mtime is deliberately not checked, as it legitimately
 predates the kernel with stable kernel filenames; SKIPped when there
-is no flavour-named initramfs or no /boot). The full pipeline also raises an
-overridable pre-flight warning when the pacman-cache policy would make
-the upcoming update non-recoverable. An incomplete snapshot (missing
+is no flavour-named initramfs or no /boot),
+.B orphans
+(WARN if any packages are installed as dependencies but no longer required
+by anything \(em use
+.B pacman \-Qdtq
+to list them and
+.B pacman \-Rns
+to remove), and
+.B security\-advisories
+(FAIL on Critical/High or WARN on Medium/Low open Arch Security
+Advisories affecting installed packages; SKIPped when
+.B arch\-audit
+is installed or the network is unreachable).
+The full pipeline also raises an overridable pre-flight warning when
+the pacman-cache policy would make the upcoming update non-recoverable,
+and fetches the Arch News RSS feed to warn of items posted since your
+last update. An incomplete snapshot (missing
 .B .timestamp ,
 empty
 .B packages/all.txt ,
@@ -177,6 +191,22 @@ acting. Boot-critical packages in the plan require
 .B \-\-confirm\-boot\-critical
 and a stdin
 .BR YES .
+.SS archward aur quarantine list
+Print a table of all AUR build quarantine entries (active and resolved).
+Columns: package, version, status (counting / quarantined / resolved),
+failure count, retry-after or resolved date, and last error snippet.
+No sudo required. Exit 0 always; an empty state is not an error.
+.SS archward aur quarantine clear [PKG] [\-\-yes]
+Clear one or all active quarantine entries (status \(-> resolved).
+Without
+.IR PKG ,
+clears every counting + quarantined entry (asks for confirmation unless
+.B \-\-yes
+is given).
+With
+.IR PKG ,
+clears that package; exits 2 if it is not found in the quarantine state.
+Resolved entries cannot be "re-cleared" (exit 0, no-op).
 .SS archward pacnew list
 Scan
 .I /etc
@@ -243,6 +273,12 @@ Per-update snapshots. Each is a timestamped directory.
 .TP
 .I ~/.local/state/archward/logs/archward.log
 Rotating run log. The post-reboot recovery breadcrumb is written here.
+.TP
+.I ~/.local/state/archward/aur_quarantine.json
+AUR build quarantine state. Keyed by package name; tracks failure counts,
+retry windows, and resolved history. Managed by the AUR phase and the
+.B archward aur quarantine
+subcommand.
 .TP
 .I /var/cache/pacman/pkg/
 Source for package downgrades. archward is cache-only by policy.

@@ -7,6 +7,8 @@ archward has two invocation shapes:
 2. **Subcommands** (v0.4.3+) — `archward <command> ...` expose the
    Snapshot-Browser capabilities (verify / snapshot / rollback /
    pacnew) so a user without a working GUI can recover.
+   `archward aur quarantine` (v0.4.6+) manages the AUR build
+   quarantine state without needing the GUI or sudo.
 
 For a task-oriented "my system broke, what do I type" walkthrough see
 **[`docs/recovery.md`](recovery.md)**. This document is the exhaustive
@@ -70,7 +72,7 @@ all discovered plugins** (the `archward.verify_checks` entry-point
 group — e.g. the bundled ZeroTier example). Output is the same check
 set the GUI's Verify view renders, in plain text.
 
-Two checks new in v0.4.4:
+Checks added in v0.4.4:
 
 - **`rollback-cache`** — FAILs if a cache-cleaning hook or aggressive
   paccache policy deleted the pre-update `.pkg.tar.*` for a package
@@ -83,6 +85,22 @@ Two checks new in v0.4.4:
   mtime (with stable kernel filenames it legitimately predates the
   kernel on a bootable system). SKIPs cleanly when there's no
   flavour-named initramfs (dracut-kver / UKI) or no `/boot`.
+
+Checks added in v0.4.5:
+
+- **`orphans`** — WARNs if `pacman -Qdtq` reports packages installed as
+  deps with no remaining dependents. WARN (not FAIL) — some orphans are
+  intentional. Detail lists the package names; "What to do?" points at
+  `pacman -Qi` / `pacman -Rns`.
+- **`security-advisories`** — Cross-references installed packages against
+  the Arch Security Advisory feed (`security.archlinux.org/all.json`).
+  Critical/High severity → FAIL; Medium/Low → WARN. SKIPs when
+  `arch-audit` is installed or the network is unreachable. Disable via
+  `verify.security_advisories = false`.
+
+The **pre-flight** phase (v0.4.5) also checks the Arch News RSS feed
+(`archlinux.org/feeds/news/`) and WARNs if items were posted since your
+last update. Disable via `gates.skip_news_check = true`.
 
 `archward verify` refuses an **incomplete snapshot** up front
 (exit 3) — missing `.timestamp`, empty `packages/all.txt`, or no
@@ -256,6 +274,69 @@ Exit 3 = snapshot missing.
 > Note: `--yes` (the flag-form auto-confirm) does **not** bypass the
 > boot-critical YES gate. That gate is intentionally a separate,
 > conscious decision.
+
+---
+
+## `archward aur`
+
+### `archward aur quarantine list`
+
+Print a table of all AUR build quarantine entries (active and resolved).
+
+```
+archward aur quarantine list
+```
+
+Columns: package, version, status (`counting` / `quarantined` / `resolved`),
+failure count, retry-after or resolved date, last error snippet.
+No sudo required. Exit 0 always; an empty state is not an error.
+
+Example output:
+
+```
+package                   version               status        fails  retry/resolved  last error
+-------------------------------------------------------------------------------------------------
+radarr                    6.1.1.10360-1         quarantined       3  2026-05-22      error NU1902: Package 'MailKit' 4.15.1…
+gossip-bin                0.9.2                 counting          2  —               sha256sums FAILED
+old-pkg                   1.0                   resolved          3  2026-05-10      build() failed
+
+1 active, 1 counting, 1 resolved
+```
+
+### `archward aur quarantine clear [PKG] [--yes]`
+
+Clear one or all active quarantine entries (set status to `resolved`).
+
+```
+archward aur quarantine clear [PKG] [--yes]
+```
+
+| Arg / Flag | Effect |
+|---|---|
+| *(no args)* | Clear all `counting` + `quarantined` entries. Asks for confirmation listing each entry. |
+| `PKG` | Clear just this package. Exit 2 if not found in quarantine state. |
+| `--yes` | Skip the confirmation prompt when clearing all. |
+
+Resolved entries cannot be re-cleared (exit 0, no-op). No sudo required.
+
+#### Exit codes
+
+```
+0  success (or already resolved — no-op)
+2  PKG not found in quarantine state
+```
+
+#### Managing quarantine in the GUI
+
+Open **Preferences → AUR**. The quarantine history table shows all entries
+with full row editing for active (`counting` / `quarantined`) rows:
+- **Failures** column — edit the count to reset or force activation.
+- **Retry / Resolved** column — set to a past date to force an immediate
+  retry on the next run.
+- **Status** column — change via dropdown; setting to `resolved` clears the entry.
+
+Buttons below the table: **Clear selected**, **Clear resolved** (remove
+resolved-only rows), **Clear all**.
 
 ---
 

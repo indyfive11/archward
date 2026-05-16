@@ -25,8 +25,11 @@ PySide6 GUI (`archward-gui`).
 
 ## Pipeline
 
-1. **Pre-flight** — refuse to run if another pacman holds `/var/lib/pacman/db.lck`,
-   or if another archward is already running (advisory `flock`).
+1. **Pre-flight** — refuse if another pacman holds `/var/lib/pacman/db.lck` or
+   another archward is running. Fetches the **Arch News RSS feed** and WARNs
+   (overridable) if items were posted since your last run — these announcements
+   often document required manual steps. Checks the pacman-cache policy and
+   WARNs if a cleaning hook would delete the rollback substrate mid-transaction.
 2. **Snapshot** — capture explicit + foreign packages, pacman config, mirror
    list, fstab, grub defaults, sshd_config(.d), resolved.conf, sudoers.d/,
    network state (`ip addr`, `ss -tlnp`, `wg show`), services, kernel +
@@ -59,9 +62,12 @@ PySide6 GUI (`archward-gui`).
    preserves original ownership and permissions; partial failure on
    chown/chmod restores from a backup.
 9. **Verify** — kernel match, .pacnew remaining, disk, pacman.log scan,
-   opt-in `systemctl is-active` services list, optional
-   reboot-recommended log. Each FAIL row gets a "What to do?" button
-   with a context-specific remediation hint.
+   rollback-cache survival, boot-integrity (initramfs freshness),
+   **orphaned packages** (WARN), **Arch Security Advisories** (FAIL on
+   Critical/High; skipped if `arch-audit` present), opt-in
+   `systemctl is-active` services list, optional reboot-recommended log.
+   Each FAIL row gets a "What to do?" button with a context-specific
+   remediation hint.
 10. **Post-verify hooks** — run user-defined shell commands from
     `cfg.hooks.post_verify` (e.g. HTTP health probes, mountpoint checks,
     real-time reachability). Always best-effort; never abort.

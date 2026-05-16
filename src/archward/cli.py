@@ -88,6 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _attach_snapshot_parser(subparsers)
     _attach_rollback_parser(subparsers)
     _attach_pacnew_parser(subparsers)
+    _attach_aur_parser(subparsers)
 
     return p
 
@@ -232,6 +233,41 @@ def _attach_pacnew_parser(subparsers) -> None:
         help="What to do with the .pacnew: keep_ours discards the .pacnew, "
         "take_new replaces the live file (preserving perms+owner), edit "
         "opens $VISUAL/$EDITOR on both files, leave is a no-op.",
+    )
+
+
+def _attach_aur_parser(subparsers) -> None:
+    """`archward aur quarantine {list,clear}` — AUR build quarantine management."""
+    sp = subparsers.add_parser(
+        "aur",
+        help="Manage AUR build quarantine.",
+    )
+    aur_sub = sp.add_subparsers(dest="aur_action", metavar="<action>")
+
+    quar_p = aur_sub.add_parser(
+        "quarantine",
+        help="Inspect or clear the AUR build quarantine list.",
+    )
+    quar_sub = quar_p.add_subparsers(dest="quarantine_action", metavar="<action>")
+
+    quar_sub.add_parser(
+        "list",
+        help="List all quarantine entries (active + resolved).",
+    )
+
+    clear_p = quar_sub.add_parser(
+        "clear",
+        help="Clear one or all active quarantine entries.",
+    )
+    clear_p.add_argument(
+        "package",
+        nargs="?",
+        default=None,
+        help="Package name to clear. Omit to clear all active entries.",
+    )
+    clear_p.add_argument(
+        "--yes", action="store_true",
+        help="Skip the confirmation prompt when clearing all entries.",
     )
 
 
@@ -525,6 +561,17 @@ def _dispatch_subcommand(args, config_path) -> int:
         if args.pacnew_action == "apply":
             return cmd.cmd_apply(args, config_path)
         print("archward pacnew: missing action — try `archward pacnew --help`", file=sys.stderr)
+        return 2
+    if args.command == "aur":
+        from archward.cli_subcommands import aur as cmd
+        if args.aur_action == "quarantine":
+            if args.quarantine_action == "list":
+                return cmd.cmd_quarantine_list(args, config_path)
+            if args.quarantine_action == "clear":
+                return cmd.cmd_quarantine_clear(args, config_path)
+            print("archward aur quarantine: missing action — try `archward aur quarantine --help`", file=sys.stderr)
+            return 2
+        print("archward aur: missing action — try `archward aur --help`", file=sys.stderr)
         return 2
     print(f"archward: unknown command {args.command!r}", file=sys.stderr)
     return 2

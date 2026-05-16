@@ -33,6 +33,7 @@ from archward.models.verify import CheckStatus, VerifyCheck, VerifyResult
 from archward.pacman import query as pq
 from archward.pacman.pacnew import find_pacnew_files
 from archward.system import disk, kernel, services
+from archward.system import security_advisories as sa
 
 PLUGIN_ENTRY_POINT_GROUP = "archward.verify_checks"
 
@@ -522,6 +523,117 @@ def _reboot_log_check(cfg: ConfigModel, snapshot_path: Path) -> VerifyCheck | No
     )
 
 
+def _orphan_check() -> VerifyCheck:
+    """Report packages installed as dependencies that are no longer required.
+
+    Uses `pacman -Qdtq` (list orphans: installed as deps with no dependents).
+    WARN (not FAIL) — users intentionally keep some orphans. The WARN row
+    points them at the right pacman commands to investigate + clean up.
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["pacman", "-Qdtq"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("_orphan_check: pacman -Qdtq timed out")
+        return VerifyCheck(
+            bucket="universal",
+            name="orphans",
+            status=CheckStatus.WARN,
+            message="orphan check timed out",
+        )
+    except FileNotFoundError:
+        return VerifyCheck(
+            bucket="universal",
+            name="orphans",
+            status=CheckStatus.PASS,
+            message="pacman not found — orphan check skipped",
+        )
+
+    orphans = [p for p in r.stdout.splitlines() if p.strip()]
+    if not orphans:
+        return VerifyCheck(
+            bucket="universal",
+            name="orphans",
+            status=CheckStatus.PASS,
+            message="No orphaned packages",
+        )
+    n = len(orphans)
+    return VerifyCheck(
+        bucket="universal",
+        name="orphans",
+        status=CheckStatus.WARN,
+        message=f"{n} orphaned package{'s' if n != 1 else ''} — installed as deps but no longer required",
+        detail="\n".join(orphans),
+    )
+
+
+def _security_advisory_check(cfg: ConfigModel) -> VerifyCheck:
+    """Cross-reference installed packages against Arch Security Advisories.
+
+    Skips silently when arch-audit is installed (avoids double-reporting)
+    or when the network is unreachable. Severity mapping:
+    Critical/High → FAIL; Medium/Low → WARN.
+    """
+    if not cfg.verify.security_advisories:
+        return VerifyCheck(
+            bucket="universal",
+            name="security-advisories",
+            status=CheckStatus.PASS,
+            message="security advisory check disabled",
+        )
+
+    if sa.arch_audit_present():
+        return VerifyCheck(
+            bucket="universal",
+            name="security-advisories",
+            status=CheckStatus.PASS,
+            message="arch-audit present — ASA check deferred to arch-audit",
+        )
+
+    advisories = sa.fetch_advisories()
+    if not advisories:
+        # Network failure or empty feed — SKIP (do not FAIL)
+        return VerifyCheck(
+            bucket="universal",
+            name="security-advisories",
+            status=CheckStatus.PASS,
+            message="ASA check skipped (network unavailable or feed empty)",
+        )
+
+    installed = list(pq.list_all())
+    open_advisories = sa.open_for_installed(advisories, installed)
+
+    if not open_advisories:
+        return VerifyCheck(
+            bucket="universal",
+            name="security-advisories",
+            status=CheckStatus.PASS,
+            message="No open Arch Security Advisories affect installed packages",
+        )
+
+    n = len(open_advisories)
+    severities = {a.severity for a in open_advisories}
+    is_critical = bool(severities & {"Critical", "High"})
+    detail_lines = "\n".join(
+        f"• {a.name} ({a.severity}) — {', '.join(a.packages)} — {', '.join(a.issues) or 'no CVE'}"
+        for a in open_advisories
+    )
+    return VerifyCheck(
+        bucket="universal",
+        name="security-advisories",
+        status=CheckStatus.FAIL if is_critical else CheckStatus.WARN,
+        message=f"{n} open Arch Security Advisory{'s' if n == 1 else 'ies'} affect installed packages",
+        detail=detail_lines,
+    )
+
+
 _STALE_MARKER = "no such unit"  # message prefix used by run_verify's auto-prune
 
 
@@ -665,6 +777,8 @@ def run_verify(
     checks.append(_boot_integrity_check())
     checks.append(_disk_check())
     checks.append(_pacman_log_check())
+    checks.append(_orphan_check())
+    checks.append(_security_advisory_check(cfg))
     reboot = _reboot_log_check(cfg, snapshot_path)
     if reboot is not None:
         checks.append(reboot)

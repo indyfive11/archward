@@ -87,6 +87,30 @@ _PHASE_TO_VIEW = {
 }
 
 
+class WarmupWorker(QThread):
+    """Runs strategy.warmup() off the Qt main thread (v0.4.5 F4b).
+
+    The askpass dialog (ksshaskpass) blocks until the user responds. Running
+    it on the main thread freezes the event loop, preventing status-bar repaints
+    and any other UI activity. Moving warmup to a daemon QThread keeps the UI
+    alive while the dialog is open.
+    """
+
+    warmup_done = Signal(bool)  # True = success, False = failure
+
+    def __init__(self, strategy: SudoStrategy, parent=None) -> None:
+        super().__init__(parent)
+        self.strategy = strategy
+
+    def run(self) -> None:
+        try:
+            ok = self.strategy.warmup()
+        except Exception:  # noqa: BLE001 — warmup must never crash the run
+            log.exception("sudo warmup raised")
+            ok = False
+        self.warmup_done.emit(ok)
+
+
 class PipelineWorker(QThread):
     finished_with_result = Signal(object)  # PipelineResult
 
@@ -172,6 +196,8 @@ class MainWindow(QMainWindow):
         # per AUR package when noconfirm=False.
         self.pkgbuild_prompter: PkgbuildPrompter | None = None
         self.worker: PipelineWorker | None = None
+        self._warmup_worker: WarmupWorker | None = None
+        self._pending_mode: Mode | None = None
 
         # ── Phase views ────────────────────────────────────────────────────
         self._views = {
@@ -301,17 +327,36 @@ class MainWindow(QMainWindow):
     def _start_run(self, mode: Mode) -> None:
         if self.worker is not None and self.worker.isRunning():
             return
+        if self._warmup_worker is not None and self._warmup_worker.isRunning():
+            return
         self._reset_views()
         self._dry_btn.setEnabled(False)
         self._update_btn.setEnabled(False)
-        # v0.4.2 hotfix: warm the sudo timestamp BEFORE the pipeline starts so
-        # the askpass dialog appears upfront, not mid-snapshot. Without this,
-        # the first sudo call inside _gather_configs (cp /etc/pacman.conf,
-        # tar /etc/ssh/sshd_config.d, etc.) is what triggered the password
-        # prompt — surprising users who'd looked away after clicking Run
-        # Update, and re-prompting per file if ksshaskpass intermittently
-        # failed to parse the prompt.
-        self._warmup_sudo_for_run()
+        self._pending_mode = mode
+
+        # v0.4.5 F4b: run warmup on a background QThread so the askpass dialog
+        # (ksshaskpass) doesn't freeze the event loop. The status bar stays
+        # responsive and repaints correctly while waiting for the user's
+        # password. _on_warmup_done starts the pipeline when warmup finishes.
+        self._status.showMessage("Authenticating…")
+        self._warmup_worker = WarmupWorker(self.strategy, parent=self)
+        self._warmup_worker.warmup_done.connect(self._on_warmup_done)
+        self._warmup_worker.start()
+
+    def _on_warmup_done(self, ok: bool) -> None:
+        if ok:
+            log.info("sudo warmup succeeded — timestamp warm")
+        else:
+            log.warning("sudo warmup failed; the pipeline will re-prompt on first sudo call")
+            self._status.showMessage(
+                "sudo warmup failed — askpass may prompt again during the run."
+            )
+        # Warmup failure is non-fatal: the pipeline re-prompts on the first
+        # sudo call inside snapshot. Proceed regardless.
+        if self._pending_mode is not None:
+            self._launch_pipeline(self._pending_mode)
+
+    def _launch_pipeline(self, mode: Mode) -> None:
         label = "dry-run" if mode is Mode.DRY_RUN else "update"
         self._status.showMessage(f"Running {label}…")
 

@@ -6,6 +6,165 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.6] — 2026-05-15
+
+**AUR build quarantine — chronically broken packages skip themselves.**
+Packages that repeatedly fail to build (dotnet NuGet CVE blocks, checksum
+mismatches, upstream build breakage) are now tracked automatically. After a
+configurable number of counted failures (default 3, spaced ≥ 24h apart to
+prevent run-inflation) the package enters a timed quarantine and is skipped
+on subsequent runs with escalating backoff (7 → 14 → 28 days). Quarantine is
+version-aware — a new upstream version clears it immediately. Every state
+transition is logged in the AUR phase stream. CLI and Preferences exposure
+give full visibility and manual control. Includes the v0.4.5 Awareness features
+released together.
+
+### Added
+
+- **AUR build quarantine (F1).** New `archward.aur.quarantine` module tracks
+  build failures per package (keyed by name + version). Failure counting
+  enforces a 24-hour minimum gap between counted events. Quarantine activates
+  after `aur.quarantine_min_failures` counted failures (default 3); the package
+  is then skipped for `aur.quarantine_initial_days` days (default 7), with
+  backoff doubling on each retry failure up to `aur.quarantine_max_days`
+  (default 28). Quarantine clears automatically when a new upstream version is
+  available, on retry success, or on manual clear. Resolved entries are kept
+  as history. State file: `~/.local/state/archward/aur_quarantine.json`.
+
+- **AUR phase transparency.** Phase start announces all active quarantine
+  entries before touching the pending list. Skipped packages log their retry
+  date. Retry-window packages log that they're being retried. On quarantine
+  activation, the full build log tail is emitted to `log.warning()` for
+  post-mortem. A lightweight error classifier (`_classify_error()`) matches
+  the captured output against known patterns (dotnet NuGet audit, checksum
+  mismatch, network errors, dependency failure, makepkg phase failure) and
+  emits a one-line actionable hint to the phase log stream.
+
+- **Pre-flight quarantine FYI.** If any packages are active (counting or
+  quarantined), a single INFO-level message appears in the pre-flight log
+  with a count and a CLI reference (`archward aur quarantine list`). Not a
+  gate — no overridable WARN; the user already saw it on prior runs.
+
+- **Result view quarantine section.** After a pipeline run, the result panel
+  lists active quarantine entries (package, version, status, failure count,
+  retry date) and points to Preferences → AUR for the full history.
+
+- **`archward aur quarantine list`.** Prints a table of all quarantine entries
+  (active and resolved): package, version, status, failure count, retry/resolved
+  date, last error snippet. No sudo required. Always exits 0.
+
+- **`archward aur quarantine clear [PKG] [--yes]`.** Clears one package or all
+  active entries (counting + quarantined → resolved). Without PKG, lists
+  affected entries and asks for confirmation unless `--yes`. Exits 2 if the
+  named package isn't in quarantine state.
+
+- **Preferences → AUR quarantine config.** Four new fields exposed in the AUR
+  tab: `quarantine_enabled` (master switch), `quarantine_min_failures`,
+  `quarantine_initial_days`, `quarantine_max_days`. All have inline help text.
+
+- **Preferences → AUR quarantine history table.** Fully editable QTableWidget
+  below the config section: active rows (counting + quarantined) allow editing
+  failure count, retry-after date (YYYY-MM-DD), and status via QComboBox.
+  Resolved rows are shown greyed-out and read-only. Three buttons: Clear
+  selected, Clear resolved, Clear all. Changes are saved to the state JSON on
+  dialog Save; discarded on Cancel.
+
+- **stdin=DEVNULL in `_run_pipe()`** (defensive fix). yay/paru in non-
+  interactive mode should never read stdin; passing DEVNULL prevents any
+  accidental stdin inheritance.
+
+### Tests
+
+534 → **568** (+34). New files:
+- `test_aur_quarantine.py` — 27 tests (check() action logic FRESH/COUNTING/
+  SKIP/RETRY, record_failure() 24h gate + threshold + escalation + cap,
+  record_success(), clear(), save/load roundtrip, corrupt JSON, _classify_error()
+  patterns)
+- `test_update_aur_quarantine.py` — 7 integration tests (quarantined package
+  skipped, added to effective_ignore, retry window not ignored, version change
+  clears quarantine, failure/success recording, disabled passthrough)
+
+## [0.4.5] — 2026-05-15
+
+**Awareness: Arch News pre-flight, orphan detection, security advisories, reliability.**
+archward now knows what's happening in the ecosystem before and after an update.
+Every major recent breakage incident — NVIDIA Pascal driver drop, Plasma 6.4 X11
+session removal, linux-firmware conflicts, CHAOS RAT AUR malware — was announced
+on archlinux.org/news/ first. archward now fetches that feed before each update.
+The verify phase gained two new universal checks: orphaned packages and open
+Arch Security Advisories. Four reliability gaps closed: three missing subprocess
+timeouts and a blocking GUI sudo warmup.
+
+### Added
+
+- **Arch News RSS pre-flight check (F1).** New `archward.system.arch_news`
+  module fetches `archlinux.org/feeds/news/` (Atom, stdlib only, no new deps)
+  and filters items published since your last archward run. If any exist, the
+  pre-flight phase raises an overridable WARN: title + link per item, so you
+  can review before the update proceeds. Caches to
+  `~/.local/state/archward/news_cache.json` (1-hour TTL) to avoid hammering
+  the feed on repeated dry-runs. SKIPs (not FAILs) when offline or on any
+  parse error. New config field `gates.skip_news_check = false` (Preferences →
+  Gates) to disable for users who monitor Arch News through another channel.
+  First-run fallback: treats all items from the past 30 days as unread.
+
+- **Orphan package report — verify phase (F2).** New universal check runs
+  `pacman -Qdtq` and WARNs (not FAILs) if any orphaned packages are found.
+  Includes the package names in detail and a "What to do?" hint pointing at
+  `pacman -Qi <pkg>` / `pacman -Rns <pkg>`. 15-second timeout; WARN on
+  timeout. Some users intentionally keep orphans — WARN (not FAIL) respects
+  that.
+
+- **Arch Security Advisory verify check (F3).** New `archward.system.security_advisories`
+  module fetches `security.archlinux.org/all.json` (public, no auth, ~200KB)
+  and cross-references installed packages with open advisories using `vercmp`.
+  Critical/High severity → FAIL; Medium/Low → WARN. SKIPs silently when the
+  network is unavailable, when `arch-audit` is installed (to avoid
+  double-reporting), or when `verify.security_advisories = false` (Preferences
+  → Verify). 4-hour cache TTL. "What to do?" hint references
+  `security.archlinux.org/`.
+
+- **Preferences help text** for `gates.skip_news_check`,
+  `verify.security_advisories`, and verify-hint keys for `orphans` and
+  `security-advisories`.
+
+### Changed
+
+- **Async sudo warmup (F4b).** The GUI's `_warmup_sudo_for_run()` previously
+  called `strategy.warmup()` on the Qt main thread, blocking the event loop
+  while the KDE askpass dialog was open. The warmup now runs in a dedicated
+  `WarmupWorker(QThread)` — the status bar shows "Authenticating…" and remains
+  repaintable while the user types their password. Non-fatal failure path
+  unchanged (pipeline proceeds with a warning).
+
+- **Missing subprocess timeouts (F4a).** Three call sites lacked timeouts and
+  could hang indefinitely on a slow/unresponsive system:
+  - `pacman/query.py` `_run()` — 30s timeout; `TimeoutExpired` returns
+    `(1, "", "timeout")` and logs a warning.
+  - `privilege/sudo.py` `AskpassStrategy.warmup()` — 5s timeout; returns
+    `False` on expiry.
+  - `system/cache_policy.py` `paccache_timer_state()` — already had a 5s
+    timeout; no change needed.
+
+### Tests
+
+477 → **534** (+57). New files:
+- `test_arch_news.py` — 19 tests (feed parse, cache hit/miss/stale, unread
+  filter, snapshot-since, first-run window, network error → empty)
+- `test_security_advisories.py` — 20 tests (JSON parse, cache, vercmp
+  matching, status filtering, verify integration: disabled/arch-audit/
+  offline/PASS/FAIL/WARN)
+- `test_verify_orphans.py` — 5 tests (0 orphans PASS, N orphans WARN,
+  singular vs plural, timeout WARN, pacman not found)
+- `test_reliability_timeouts.py` — 4 tests (query timeout fallback, sudo
+  warmup timeout)
+
+Updated:
+- `test_gates_preflight.py` — hermetic autouse fixture stubs news fetch; 4
+  new news-specific tests (no items PASS, unread WARN, plural, skip config)
+- `test_main_window_sudo_warmup.py` — 3 new tests for WarmupWorker (success,
+  failure, exception) + integration test for async start_run flow
+
 ## [0.4.4] — 2026-05-15
 
 **Rollback-substrate awareness + production-reliability plugs.**

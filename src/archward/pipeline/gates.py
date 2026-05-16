@@ -10,6 +10,8 @@ from archward.models.config import ConfigModel
 from archward.models.gate import GateResult, GateStatus
 from archward.models.snapshot import Snapshot
 from archward.pacman.runner import check_pacman_db_lock
+from archward.pipeline.snapshot import latest_snapshot
+from archward.system import arch_news as an
 from archward.system import cache_policy as cp
 from archward.system import disk
 
@@ -114,6 +116,79 @@ def preflight_checks(cfg: ConfigModel, bus: EventBus) -> list[GateResult]:
                     message=f"rollback cache policy: {policy.safety.value}",
                 )
             )
+
+    # Arch News pre-flight check (v0.4.5 F1). Fetch the Arch News Atom feed
+    # and warn if items exist since the last archward run. This catches
+    # announcements like NVIDIA driver drops, major ABI changes, and AUR
+    # malware disclosures that are always posted to archlinux.org/news first.
+    # SKIP (not FAIL) when offline or disabled. WARN is overridable so the
+    # user can proceed if they've already read the news.
+    if not cfg.gates.skip_news_check:
+        try:
+            latest = latest_snapshot(cfg.general.snapshot_dir)
+            if latest is not None:
+                since = an.since_from_snapshot(latest[0]) or an.first_run_since()
+            else:
+                since = an.first_run_since()
+            items = an.fetch_news()
+            unread = an.unread_since(items, since)
+        except Exception as e:  # noqa: BLE001 — news check must never block the run
+            log.info("arch-news check skipped: %s", e)
+            unread = None
+            items = None
+
+        if items is None:
+            # network/parse failure — SKIP silently
+            pass
+        elif unread:
+            n = len(unread)
+            detail_lines = "\n".join(
+                f"• {item.title}\n  {item.link}" for item in unread
+            )
+            msg = f"{n} Arch News item{'s' if n != 1 else ''} since your last update — review before proceeding"
+            bus.emit_log(PHASE_PREFLIGHT, f"WARN arch-news: {msg}")
+            results.append(
+                GateResult(
+                    name="arch-news",
+                    status=GateStatus.WARN,
+                    message=msg,
+                    detail=detail_lines,
+                    can_override=cfg.gates.allow_override,
+                )
+            )
+        else:
+            bus.emit_log(PHASE_PREFLIGHT, "PASS arch-news: no unread Arch News items")
+            results.append(
+                GateResult(
+                    name="arch-news",
+                    status=GateStatus.PASS,
+                    message="No unread Arch News items",
+                )
+            )
+
+    # AUR quarantine FYI (v0.4.6). Not a gate — just surface active quarantine
+    # entries so the user sees them at run-start, not buried in the AUR phase.
+    if cfg.aur.quarantine_enabled:
+        try:
+            from archward.aur.quarantine import AurQuarantine
+            q = AurQuarantine(cfg.aur)
+            q.load()
+            active = q.active_entries()
+            if active:
+                n_quarantined = sum(1 for _, e in active if e.status == "quarantined")
+                n_counting = sum(1 for _, e in active if e.status == "counting")
+                parts = []
+                if n_quarantined:
+                    parts.append(f"{n_quarantined} quarantined")
+                if n_counting:
+                    parts.append(f"{n_counting} counting toward threshold")
+                bus.emit_log(
+                    PHASE_PREFLIGHT,
+                    f"INFO aur-quarantine: {', '.join(parts)} "
+                    f"— see `archward aur quarantine list` or Preferences → AUR",
+                )
+        except Exception as e:  # noqa: BLE001
+            log.debug("aur-quarantine preflight note failed: %s", e)
 
     bus.emit_result(
         PHASE_PREFLIGHT,

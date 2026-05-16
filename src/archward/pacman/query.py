@@ -16,6 +16,9 @@ from archward.logging_setup import strip_ansi
 log = logging.getLogger(__name__)
 
 
+_QUERY_TIMEOUT_S = 30
+
+
 def _run(argv: list[str]) -> tuple[int, str, str]:
     """Run a command, return (returncode, stdout, stderr). Locale forced to C."""
     try:
@@ -24,11 +27,15 @@ def _run(argv: list[str]) -> tuple[int, str, str]:
             check=False,
             capture_output=True,
             text=True,
+            timeout=_QUERY_TIMEOUT_S,
             env={**__import__("os").environ, "LANG": "C"},
         )
     except FileNotFoundError as e:
         log.error("command not found: %s", argv[0])
         return 127, "", str(e)
+    except subprocess.TimeoutExpired:
+        log.warning("pacman query timed out after %ss: %s", _QUERY_TIMEOUT_S, argv)
+        return 1, "", "timeout"
     return r.returncode, r.stdout, r.stderr
 
 

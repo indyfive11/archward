@@ -63,6 +63,18 @@ class ResultView(QWidget):
             lines.append(f"  AUR: {len(result.aur.failures)} build failure(s):")
             for f in result.aur.failures:
                 lines.append(f"    - {f.package}")
+        if result.aur and result.aur.quarantine:
+            active = [
+                (pkg, ver, status, fails, retry)
+                for pkg, ver, status, fails, retry in result.aur.quarantine.active
+                if status != "resolved"
+            ]
+            if active:
+                lines.append(f"  AUR quarantine: {len(active)} package(s):")
+                for pkg, ver, status, fails, retry in active:
+                    retry_str = f" — retry {retry}" if retry else ""
+                    lines.append(f"    - {pkg} {ver} ({status}, {fails} failure(s){retry_str})")
+                lines.append("    (see Preferences → AUR or `archward aur quarantine list`)")
         if result.summary.reboot_needed:
             lines.append("")
             lines.append("ACTION: Reboot to activate the new kernel.")

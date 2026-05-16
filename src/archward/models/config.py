@@ -31,6 +31,7 @@ class GatesConfig(BaseModel):
     snapshot_max_age_minutes: int = 60
     min_disk_gb: int = 5
     allow_override: bool = True
+    skip_news_check: bool = False
 
 
 class RiskConfig(BaseModel):
@@ -76,6 +77,10 @@ class AurConfig(BaseModel):
     enabled: bool = True
     helper_preference: tuple[str, ...] = ("yay", "paru", "aurutils")
     skip: bool = False
+    quarantine_enabled: bool = True
+    quarantine_min_failures: int = 3
+    quarantine_initial_days: int = 7
+    quarantine_max_days: int = 28
 
 
 class PacmanConfig(BaseModel):
@@ -90,6 +95,7 @@ class VerifyConfig(BaseModel):
 
     enabled: bool = True
     reboot_log: str = "/var/log/reboot-recommendation-trigger.log"
+    security_advisories: bool = True
 
 
 class PrivilegeConfig(BaseModel):

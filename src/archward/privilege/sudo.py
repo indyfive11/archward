@@ -90,10 +90,18 @@ class AskpassStrategy:
         # sudo asks for a password. Calling `sudo -n true` here lets us notice if
         # the NOPASSWD path is already available.
         try:
-            r = subprocess.run(["sudo", "-n", "true"], check=False, capture_output=True)
+            r = subprocess.run(
+                ["sudo", "-n", "true"],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
             return r.returncode == 0
         except FileNotFoundError:
             log.error("sudo binary not found")
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning("sudo -n true timed out")
             return False
 
     def env(self) -> dict[str, str]:
