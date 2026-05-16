@@ -639,14 +639,17 @@ def _sudo_scan(script: Path) -> list[dict] | None:
 
     Uses the existing sudo timestamp (non-interactive). Returns parsed
     JSON on success, None if sudo is not available or the script errors.
+
+    Uses /usr/bin/python3 explicitly — the helper script has no archward
+    imports so any system Python 3 works, and the sudoers NOPASSWD entry
+    is pinned to that path.
     """
     import json as _json
     import subprocess
-    import sys
 
     try:
         r = subprocess.run(
-            ["sudo", "-n", sys.executable, str(script)],
+            ["sudo", "-n", "/usr/bin/python3", str(script)],
             capture_output=True,
             text=True,
             timeout=30,
