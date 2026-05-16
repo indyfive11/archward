@@ -644,6 +644,17 @@ def main_gui(argv: list[str] | None = None) -> int:
         from archward.ui.persistent_state import get_last_used_profile_path
         config_path = get_last_used_profile_path()
 
+    # First-run welcome wizard: show automatically when no --profile was
+    # given and the wizard hasn't been completed yet.
+    if config_path is None:
+        from archward.ui.persistent_state import get_wizard_completed
+        if not get_wizard_completed():
+            from archward.ui.dialogs.welcome_wizard import WelcomeWizard
+            from PySide6.QtWidgets import QDialog
+            wiz = WelcomeWizard()
+            if wiz.exec() == QDialog.DialogCode.Accepted and wiz.result_path:
+                config_path = wiz.result_path
+
     window = MainWindow(config_path=config_path)
     window.show()
     return app.exec()

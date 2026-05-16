@@ -15,6 +15,8 @@ Current keys:
   feature below.
 - `profiles/last_used_path` (str) — absolute path of the most recent
   active profile, or "" for the default config.
+- `wizard/completed` (bool) — set after the welcome wizard finishes so it
+  does not auto-show on subsequent launches.
 
 Future keys can be added here without churning the config schema.
 """
@@ -27,6 +29,7 @@ from PySide6.QtCore import QSettings
 
 _KEY_REMEMBER = "profiles/remember_last_used"
 _KEY_LAST_PATH = "profiles/last_used_path"
+_KEY_WIZARD_DONE = "wizard/completed"
 
 
 def _settings() -> QSettings:
@@ -73,4 +76,14 @@ def clear_last_used_profile_path() -> None:
     off so a future toggle-on doesn't read a stale value."""
     s = _settings()
     s.remove(_KEY_LAST_PATH)
+    s.sync()
+
+
+def get_wizard_completed() -> bool:
+    return bool(_settings().value(_KEY_WIZARD_DONE, False, type=bool))
+
+
+def set_wizard_completed() -> None:
+    s = _settings()
+    s.setValue(_KEY_WIZARD_DONE, True)
     s.sync()
