@@ -159,26 +159,49 @@ archward ships as `archward` on the AUR (live since v0.3.2, currently at v0.4.4 
 
 ### Per-release submission workflow
 
-For each tagged release on GitHub (e.g. v0.3.3):
+Full checklist for each release (X.Y.Z = version, e.g. 0.4.7):
 
 ```bash
-# 1. Bump pkgver + replace SKIP with the real sha256 of the GitHub tarball.
+# 1. Bump version in __init__.py, pyproject.toml, packaging/PKGBUILD.
+#    Write CHANGELOG entry. Commit.
+
+# 2. Tag and push to GitHub.
+git tag vX.Y.Z
+git push origin main
+git push origin vX.Y.Z
+
+# 3. Create the GitHub Release (makes it visible on the Releases page).
+gh release create vX.Y.Z \
+  --repo indyfive11/archward \
+  --title "archward vX.Y.Z" \
+  --notes "$(cat <<'NOTES'
+<paste CHANGELOG body for this version>
+NOTES
+)"
+
+# 4. Fetch the tarball GitHub generates from the tag and get its sha256.
 cd ~/dev/archward/packaging
 curl -sL -o /tmp/archward-vX.Y.Z.tar.gz \
     "https://github.com/indyfive11/archward/archive/vX.Y.Z.tar.gz"
 sha256sum /tmp/archward-vX.Y.Z.tar.gz
-#   → paste hash into PKGBUILD's sha256sums=(...) and bump pkgver=...
+#   → paste hash into PKGBUILD's sha256sums=(...)
 
-# 2. Regenerate .SRCINFO (required by AUR; rejected without it).
+# 5. Regenerate .SRCINFO (required by AUR; rejected without it).
 makepkg --printsrcinfo > .SRCINFO
 
-# 3. Smoke-test the recipe locally (build only — runtime deps already installed).
+# 6. Smoke-test the recipe locally (build only — runtime deps already installed).
 makepkg -f --nodeps
 #   → expect: archward-X.Y.Z-1-any.pkg.tar.zst built; install paths sane.
-rm -rf src pkg archward-* *.pkg.tar.zst   # cleanup
+rm -rf src/ pkg/ *.tar.gz *.tar.zst *.pkg.tar.zst   # cleanup
 
-# 4. Sync to the AUR clone, commit, push.
-cp PKGBUILD .SRCINFO ~/dev/archward-aur/
+# 7. Commit sha256 update, push to GitHub.
+cd ~/dev/archward
+git add packaging/PKGBUILD packaging/.SRCINFO
+git commit -m "packaging: vX.Y.Z sha256 + regenerate .SRCINFO"
+git push origin main
+
+# 8. Sync to the AUR clone, commit, push.
+cp packaging/PKGBUILD packaging/.SRCINFO ~/dev/archward-aur/
 cd ~/dev/archward-aur
 git add PKGBUILD .SRCINFO
 git commit -m "archward X.Y.Z"
