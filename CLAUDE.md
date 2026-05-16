@@ -36,7 +36,7 @@ The bash scripts are the **reference implementation for behavior** — read them
 4. [`docs/hooks.md`](./docs/hooks.md) — `[hooks]` user guide (v0.3.1+).
 5. [`docs/plugins.md`](./docs/plugins.md) — `archward.verify_checks` entry-point plugin author guide (v0.3.3+).
 6. [`PLAN.md`](./PLAN.md) — historical design spec from before v0.1.0. v1 is shipped; treat PLAN as reference, not a TODO.
-7. `~/bin/system-update.sh`, `~/bin/pre-update-snapshot.sh`, `~/bin/post-update-verify.sh` — Rob's local bash pipeline archward generalizes. Reference for behavior on edge cases.
+7. `~/bin/system-update.sh`, `~/bin/pre-update-snapshot.sh`, `~/bin/post-update-verify.sh` — maintainer's local bash pipeline archward generalizes. Reference for behavior on edge cases.
 8. `~/dev/liberty-books/` and `~/dev/endeavoring-conky/` — sibling PySide6 / AUR projects for convention comparisons.
 
 ## Locked decisions (do not relitigate)
@@ -89,7 +89,7 @@ The v1 phases below all shipped in v0.1.0–v0.1.4; the v2 backlog shipped in v0
 7. ✅ Packaging (desktop file, icon, README, PKGBUILD, AUR submission)
 8. ✅ v2 backlog — see "Shipped feature surface" above
 
-## Rob's preferences — strict rules
+## Maintainer preferences — strict rules
 
 These are from `~/.claude/CLAUDE.md` and project memories. **Follow these without being reminded.**
 
@@ -103,8 +103,8 @@ These are from `~/.claude/CLAUDE.md` and project memories. **Follow these withou
 - Only use emojis if explicitly requested.
 
 ### Sudo / privilege (CRITICAL — see below)
-- **NEVER run sudo blind from a Bash tool call.** Check sudo timestamp first with `sudo -n true`. If expired, do NOT try password-based sudo — it will fail (Bash tool is non-TTY) and increment PAM faillock. **5 failures = Rob locked out of sudo.** This already happened today.
-- **Use askpass instead.** `SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A <cmd>` pops a KDE password dialog Rob can answer. Within a single Bash tool invocation, the sudo timestamp persists across multiple calls.
+- **NEVER run sudo blind from a Bash tool call.** Check sudo timestamp first with `sudo -n true`. If expired, do NOT try password-based sudo — it will fail (Bash tool is non-TTY) and increment PAM faillock. **5 failures = maintainer locked out of sudo.**
+- **Use askpass instead.** `SUDO_ASKPASS=/usr/bin/ksshaskpass sudo -A <cmd>` pops a KDE password dialog the maintainer can answer. Within a single Bash tool invocation, the sudo timestamp persists across multiple calls.
 - **Sudo timestamp does NOT persist across Bash tool calls** because each call is a fresh non-TTY shell. To prime sudo for the whole tool run, set `SUDO_ASKPASS` and call `sudo -A -v` at the start.
 - The user has a `/etc/sudoers.d/claude-tasks` NOPASSWD entry for a specific allowlist (`tee, systemctl, chmod, pacman, ufw, sysctl, augenrules, grub-mkconfig, mkdir, wg, wg-quick, ln, resolvectl, cp, rm, ip, vpn-full, vpn-split, ls, udevadm`). Anything outside that list needs askpass.
 - **NEVER run VPN toggle commands** (`vpn-full`, `vpn-split`, `wg-quick switches`). They change the source IP mid-stream and hang Claude's own API connection.
@@ -118,11 +118,11 @@ These are from `~/.claude/CLAUDE.md` and project memories. **Follow these withou
 
 ## Reference / memory pointers
 
-Rob has an extensive memory system at `/home/rob/.claude/projects/-home-rob/memory/`. **Read `MEMORY.md` there first** for the index. Memories particularly relevant to this project:
+The maintainer has an extensive memory system at `/home/rob/.claude/projects/-home-rob/memory/`. **Read `MEMORY.md` there first** for the index. Memories particularly relevant to this project:
 
 - `project_system_update_pipeline.md` — the bash pipeline this project generalizes (gates, HIGH RISK list, .pacnew strategies, RESULT tag workflow). Baseline of what archward must replicate.
-- `project_liberty_books.md` — Rob's other PySide6 project; reference for repo layout, requirements.txt patterns, virtualenv conventions.
-- `project_endeavoring_conky.md` — Rob's other public AUR-aspiring repo; reference for GitHub conventions, config-file gitignore pattern, AUR-style README.
+- `project_liberty_books.md` — maintainer's other PySide6 project; reference for repo layout, requirements.txt patterns, virtualenv conventions.
+- `project_endeavoring_conky.md` — maintainer's other public AUR-aspiring repo; reference for GitHub conventions, config-file gitignore pattern, AUR-style README.
 - `feedback_sudo_faillock.md` — the critical "don't trigger sudo blind" rule above, with the painful prior incident.
 - `feedback_no_auto_commit.md` — the never-commit-without-asking rule.
 - `feedback_draft_prs.md` — the draft-PR rule.
@@ -213,6 +213,6 @@ For testing on other distros: spin up a VM or container. PLAN.md §14 has the fu
 ## When in doubt
 
 - **CHANGELOG.md is the canonical record of shipped state.** PLAN.md is historical — if it says something is "v2 reserved" but CHANGELOG shows it shipped in v0.3.x, CHANGELOG wins.
-- If a design question arises that isn't covered, ask Rob — don't guess.
+- If a design question arises that isn't covered, ask the maintainer — don't guess.
 - Don't reintroduce items already shipped as TODOs. Cross-check "Shipped feature surface" above before proposing work that sounds like it might already exist.
 - Non-trivial feature work uses Plan mode before coding; small/contained changes can dive straight in.

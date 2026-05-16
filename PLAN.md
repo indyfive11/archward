@@ -8,7 +8,7 @@ The goal is a clean Python/PySide6 GUI rewrite — `archward` — that generaliz
 
 **Locked decisions:**
 - Name: **archward** (Arch + ward = guard against bad updates). AUR collision check confirmed free.
-- Stack: Python 3.11+ with PySide6 (Qt6). Mirrors Rob's liberty-books patterns at `~/dev/liberty-books/`.
+- Stack: Python 3.11+ with PySide6 (Qt6). Mirrors the maintainer's liberty-books patterns at `~/dev/liberty-books/`.
 - UI: native desktop GUI (single QMainWindow with phase rail + log pane).
 - AUR: integrated second phase, auto-detects helper (yay > paru > aurutils), skips gracefully if none found, `--no-aur` flag opts out.
 - Config: single TOML at `~/.config/archward/config.toml`, auto-detect populates on first run.
@@ -134,7 +134,7 @@ archward/
 
 - `/home/rob/bin/system-update.sh` — gates, risk classification, pacnew strategy
 - `/home/rob/bin/pre-update-snapshot.sh` — what to capture
-- `/home/rob/bin/post-update-verify.sh` — universal vs Rob-specific checks
+- `/home/rob/bin/post-update-verify.sh` — universal vs maintainer-specific checks
 - `/home/rob/dev/liberty-books/main.py` and `~/dev/liberty-books/ui/` — PySide6 patterns
 - `/home/rob/dev/endeavoring-conky/README.md` + `LICENSE` — repo conventions
 
@@ -633,7 +633,7 @@ lists the others as secondary annotations ("Reboot needed AND pacnew merge pendi
 
 ## Privileged operation strategy (`privilege/sudo.py`)
 
-Default: **askpass + persistent sudo timestamp**. Rationale: it's Rob's known-working pattern, works on any DE with any askpass binary, minimizes password prompts.
+Default: **askpass + persistent sudo timestamp**. Rationale: it's the maintainer's known-working pattern, works on any DE with any askpass binary, minimizes password prompts.
 
 ```python
 class SudoStrategy(Protocol):
@@ -931,7 +931,7 @@ version = "0.1.0"
 description = "A safe-update GUI for Arch-based Linux distributions"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
-authors = [{ name = "Rob Petersen" }]
+authors = [{ name = "indyfive11" }]
 requires-python = ">=3.11"
 dependencies = [
   "PySide6>=6.6",
@@ -1006,7 +1006,7 @@ StartupNotify=true
 
 ## Implementation order (demoable at every step)
 
-1. **CLI core, no GUI/AUR/config** — skeleton, models, sudo strategy, pacman query/runner, snapshot, gates, hard-coded risk, official update, universal verify, RESULT tags. Demo: matches existing bash scripts' output on Rob's machine.
+1. **CLI core, no GUI/AUR/config** — skeleton, models, sudo strategy, pacman query/runner, snapshot, gates, hard-coded risk, official update, universal verify, RESULT tags. Demo: matches existing bash scripts' output on the maintainer's machine.
 2. **Config + auto-detect** — loader, defaults, `detect.py`, `--detect` flag. Replace hard-coded risk list with `config.risk.high`. Add services bucket to verify. Demo: works on a clean Arch VM.
 3. **AUR phase** — `helper.py`, `yay.py` adapter, `update_aur.py`, build-failure capture. Then `paru.py`, `aurutils.py`. Demo: end-to-end CLI with official + AUR.
 4. **Minimal GUI shell** — `main_window`, `phase_rail`, `log_pane`, `qt_bus`. `--gui` launches; pipeline runs in `QThread`. Demo: GUI mirrors CLI progress.
@@ -1039,7 +1039,7 @@ Coverage target: 85%+ on pure logic modules.
 | Arch | KDE Plasma 6 | yay | reference |
 | Arch | GNOME 46 | paru | |
 | Arch | XFCE | aurutils | |
-| EndeavourOS | KDE | yay | Rob's machine — closest to bash-script behavior |
+| EndeavourOS | KDE | yay | maintainer's machine — closest to bash-script behavior |
 | Manjaro | KDE | yay | document pamac not yet supported |
 | CachyOS | KDE | paru | |
 | Garuda | KDE | paru | |
@@ -1047,7 +1047,7 @@ Coverage target: 85%+ on pure logic modules.
 
 For each: `--dry-run`, then real update in a VM, then verify phase. Confirm askpass works on each DE.
 
-### End-to-end acceptance (Rob's machine, manual smoke test)
+### End-to-end acceptance (maintainer's machine, manual smoke test)
 1. `archward --detect` writes a sane `~/.config/archward/config.toml`.
 2. `archward --dry-run` produces the same `RESULT:` tag as `~/bin/system-update.sh --dry-run`.
 3. `archward --gui` launches; full pipeline completes; result banner matches CLI.
@@ -1074,7 +1074,7 @@ For each: `--dry-run`, then real update in a VM, then verify phase. Confirm askp
 1. **Replace placeholder `archward.svg` icon** with a real SVG before the AUR
    submission. AUR maintainers reject packages with literal placeholder icons.
 2. **Test fixtures** under `tests/fixtures/` must be populated from at least one
-   real bash-pipeline run on Rob's machine (EndeavourOS + yay), sanitized of
+   real bash-pipeline run on the maintainer's machine (EndeavourOS + yay), sanitized of
    machine-specific paths/hostnames. Document the regeneration procedure in
    `docs/development.md`.
 3. **CHANGELOG.md** entry for `v0.1.0` in Keep-a-Changelog format with an
