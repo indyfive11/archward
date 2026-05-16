@@ -207,10 +207,12 @@ HELP: dict[tuple[str, str], str] = {
         "library files (.so) that are still mapped into memory. After a package "
         "update, long-running services continue using the old library version "
         "until restarted — this check surfaces which ones need a restart. "
-        "Off by default. For full coverage of system services (sshd, "
-        "NetworkManager, etc.) a NOPASSWD sudoers entry is required; see "
-        "docs/development.md. Without it, only user-visible processes "
-        "(KDE/Plasma, pipewire, browsers) are scanned."
+        "Off by default.\n\n"
+        "Use the 'Enable full coverage' button to let archward scan system "
+        "services (sshd, NetworkManager, etc.) in addition to user-visible "
+        "processes. This writes a NOPASSWD sudoers entry via askpass — archward "
+        "shows you the exact content before writing. Without it, only "
+        "user-visible processes (KDE/Plasma, pipewire, browsers) are scanned."
     ),
 
     # ── Privilege ──────────────────────────────────────────────────────────

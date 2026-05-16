@@ -761,6 +761,15 @@ class _PacmanTab(_Tab):
         )
 
 
+_STALE_LIBS_SUDOERS_PATH = Path("/etc/sudoers.d/archward-stale-libs")
+_STALE_LIBS_SCAN_SCRIPT = Path("/usr/share/archward/stale_libs_scan")
+_STALE_LIBS_SUDOERS_LINE = (
+    f"# Managed by archward — allows full stale-library scan without password prompt.\n"
+    f"# Remove this file to restrict stale-libs check to user-visible processes only.\n"
+    f"%wheel ALL=(root) NOPASSWD: /usr/bin/python3 {_STALE_LIBS_SCAN_SCRIPT}\n"
+)
+
+
 class _VerifyTab(_Tab):
     section = "verify"
 
@@ -769,21 +778,121 @@ class _VerifyTab(_Tab):
         self._enabled = QCheckBox("Enable verify phase")
         self._security_advisories = QCheckBox("Check Arch Security Advisories")
         self._stale_libs = QCheckBox("Detect stale library versions after update")
+        self._stale_libs_sudo_btn = QPushButton()
         self._reboot_log = QLineEdit()
         self._reboot_log.setPlaceholderText("/var/log/reboot-recommendation-trigger.log")
+
+        stale_row = QHBoxLayout()
+        stale_row.setContentsMargins(0, 0, 0, 0)
+        stale_row.addWidget(self._stale_libs)
+        stale_row.addSpacing(12)
+        stale_row.addWidget(self._stale_libs_sudo_btn)
+        stale_row.addStretch()
 
         form = QFormLayout(self)
         form.addRow("", _field_with_help(self._enabled, "verify", "enabled"))
         form.addRow("", _field_with_help(self._security_advisories, "verify", "security_advisories"))
-        form.addRow("", _field_with_help(self._stale_libs, "verify", "stale_libs"))
+        form.addRow("", _field_with_help(_wrap(stale_row), "verify", "stale_libs"))
         form.addRow("Reboot-recommended log:",
                     _field_with_help(self._reboot_log, "verify", "reboot_log"))
+
+        self._stale_libs_sudo_btn.clicked.connect(self._toggle_sudoers)
+        self._refresh_sudo_btn()
+
+    def _sudoers_active(self) -> bool:
+        return _STALE_LIBS_SUDOERS_PATH.exists()
+
+    def _refresh_sudo_btn(self) -> None:
+        if self._sudoers_active():
+            self._stale_libs_sudo_btn.setText("Full coverage enabled ✓")
+            self._stale_libs_sudo_btn.setToolTip(
+                f"sudoers entry active at {_STALE_LIBS_SUDOERS_PATH}.\n"
+                "Click to remove (reverts to user-visible scan only)."
+            )
+        else:
+            self._stale_libs_sudo_btn.setText("Enable full coverage…")
+            self._stale_libs_sudo_btn.setToolTip(
+                "Adds a sudoers entry so archward can scan system services\n"
+                "(sshd, NetworkManager, etc.) without a password prompt.\n"
+                f"Writes: {_STALE_LIBS_SUDOERS_PATH}"
+            )
+
+    def _toggle_sudoers(self) -> None:
+        from archward.app import build_sudo_strategy
+        from archward.config.loader import load_config
+        from archward.pacman.runner import run_capture
+
+        if self._sudoers_active():
+            confirm = QMessageBox.question(
+                self,
+                "Remove sudoers entry",
+                f"Remove {_STALE_LIBS_SUDOERS_PATH}?\n\n"
+                "The stale-libs check will revert to scanning user-visible\n"
+                "processes only (KDE/Plasma, pipewire, browsers).",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
+            strategy = build_sudo_strategy(load_config())
+            code, _out, err = run_capture(
+                ["rm", str(_STALE_LIBS_SUDOERS_PATH)], strategy=strategy,
+            )
+            if code != 0:
+                QMessageBox.critical(
+                    self, "Remove failed",
+                    f"Could not remove {_STALE_LIBS_SUDOERS_PATH}:\n{err.strip()}",
+                )
+                return
+            QMessageBox.information(self, "Removed", "sudoers entry removed.")
+        else:
+            preview = (
+                "Enable full stale-library coverage?\n\n"
+                "archward will write (via sudo / askpass):\n\n"
+                f"  {_STALE_LIBS_SUDOERS_PATH}\n\n"
+                "Contents:\n"
+                f"{_STALE_LIBS_SUDOERS_LINE}\n"
+                "This allows archward to read /proc/<pid>/maps for all running\n"
+                "processes without a password prompt, so system services like\n"
+                "sshd and NetworkManager are included in the stale-libs check.\n\n"
+                "Proceed?"
+            )
+            if QMessageBox.question(
+                self, "Enable full coverage", preview,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            strategy = build_sudo_strategy(load_config())
+            code, _out, err = run_capture(
+                ["tee", str(_STALE_LIBS_SUDOERS_PATH)],
+                strategy=strategy,
+                input_text=_STALE_LIBS_SUDOERS_LINE,
+            )
+            if code != 0:
+                QMessageBox.critical(
+                    self, "Write failed",
+                    f"Could not write {_STALE_LIBS_SUDOERS_PATH}:\n{err.strip()}",
+                )
+                return
+            # Lock down permissions (sudoers.d files must be 0440)
+            run_capture(
+                ["chmod", "0440", str(_STALE_LIBS_SUDOERS_PATH)], strategy=strategy,
+            )
+            QMessageBox.information(
+                self, "Enabled",
+                "Full stale-library coverage enabled.\n"
+                f"sudoers entry written to {_STALE_LIBS_SUDOERS_PATH}.",
+            )
+
+        self._refresh_sudo_btn()
 
     def load(self, cfg: ConfigModel) -> None:
         self._enabled.setChecked(cfg.verify.enabled)
         self._security_advisories.setChecked(cfg.verify.security_advisories)
         self._stale_libs.setChecked(cfg.verify.stale_libs)
         self._reboot_log.setText(cfg.verify.reboot_log)
+        self._refresh_sudo_btn()
 
     def dump(self) -> VerifyConfig:
         return VerifyConfig(
