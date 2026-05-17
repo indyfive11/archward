@@ -8,11 +8,11 @@ human-friendly form ("Needs Review" rather than "RESULT:NEEDS_REVIEW").
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from archward.pipeline.pipeline import PipelineResult
-from archward.ui.theme import brand_success_colors, status_palette
+from archward.ui.theme import brand_palette, brand_success_colors, status_palette
 
 
 # Tag → (severity_key, human label). The actual bg/fg colors are pulled from
@@ -46,10 +46,23 @@ def _colors_for(severity: str) -> tuple[str, str]:
 
 
 class ResultBanner(QWidget):
+    orphan_manage_requested = Signal(list)  # list[str] of orphan package names
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._label = QLabel("")
         self._label.setStyleSheet("font-weight: bold; padding: 2px 10px;")
+        _brand = brand_palette()
+        self._orphan_btn = QPushButton("Manage orphan packages…")
+        self._orphan_btn.setFlat(True)
+        self._orphan_btn.setStyleSheet(
+            f"QPushButton {{ color: {_brand.accent_text_css}; "
+            f"text-decoration: underline; padding: 0 8px; }}"
+            f"QPushButton:hover {{ background: {_brand.accent_bg_tint}; }}"
+        )
+        self._orphan_btn.setVisible(False)
+        self._orphan_btn.clicked.connect(self._on_orphan_clicked)
+        self._orphans: list[str] = []
         self._detail = QLabel("")
         self._detail.setStyleSheet("padding: 2px 10px;")
         self._detail.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
@@ -58,10 +71,14 @@ class ResultBanner(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._label)
+        layout.addWidget(self._orphan_btn)
         layout.addWidget(self._detail, stretch=1)
 
         self.setFixedHeight(24)
         self.setVisible(False)
+
+    def _on_orphan_clicked(self) -> None:
+        self.orphan_manage_requested.emit(self._orphans)
 
     def show_result(self, result: PipelineResult) -> None:
         if result.summary is None:
@@ -77,6 +94,15 @@ class ResultBanner(QWidget):
         bg, fg = _colors_for(severity)
         self._label.setText(human)
         self._apply_style(bg, fg)
+
+        # Orphan CTA — show when verify detected orphans.
+        self._orphans = []
+        if result.verify:
+            for check in result.verify.checks:
+                if check.name == "orphans" and check.detail:
+                    self._orphans = [ln.strip() for ln in check.detail.splitlines() if ln.strip()]
+                    break
+        self._orphan_btn.setVisible(bool(self._orphans))
 
         # Right-side detail: a compact one-liner of the most relevant context.
         bits: list[str] = []
@@ -102,6 +128,8 @@ class ResultBanner(QWidget):
         """Hide the banner — called at the start of each run."""
         self._label.setText("")
         self._detail.setText("")
+        self._orphan_btn.setVisible(False)
+        self._orphans = []
         self.setVisible(False)
 
     def _apply_style(self, bg: str, fg: str) -> None:

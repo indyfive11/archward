@@ -364,6 +364,13 @@ class MainWindow(QMainWindow):
         _spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(_spacer)
 
+        # Connect orphan CTA in the result banner to the manager dialog.
+        self._result_banner.orphan_manage_requested.connect(self._open_orphan_manager)
+
+        # ── Tools menu ─────────────────────────────────────────────────────
+        tools_menu = self.menuBar().addMenu("&Tools")
+        tools_menu.addAction("Manage Orphan Packages…", lambda: self._open_orphan_manager([]))
+
         # ── Help menu ──────────────────────────────────────────────────────
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction("Setup Wizard…", self._open_welcome_wizard)
@@ -640,6 +647,11 @@ class MainWindow(QMainWindow):
         # through the same log pane); otherwise the browser falls back to the
         # logging module.
         dlg = SnapshotBrowser(self.cfg, self.strategy, self.bus, parent=self)
+        dlg.exec()
+
+    def _open_orphan_manager(self, orphans: list[str]) -> None:
+        from archward.ui.dialogs.orphan_manager import OrphanManagerDialog
+        dlg = OrphanManagerDialog(self.cfg, self.strategy, orphans=orphans, parent=self)
         dlg.exec()
 
     def _open_welcome_wizard(self) -> None:
