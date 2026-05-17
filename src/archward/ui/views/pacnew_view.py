@@ -37,6 +37,7 @@ from archward.models.pacnew import PacnewAction, PacnewFile, PacnewRecommendatio
 from archward.pacman.pacnew import apply_action
 from archward.privilege.sudo import SudoStrategy
 from archward.ui.dialogs.diff_dialog import DiffDialog
+from archward.ui.persistent_state import load_column_widths, save_column_widths
 from archward.ui.theme import status_palette
 
 log = logging.getLogger(__name__)
@@ -71,11 +72,16 @@ class PacnewView(QWidget):
         self._tree.setHeaderLabels(["File", "Recommendation", "Note", "Status", "Actions"])
         self._tree.setRootIsDecorated(False)
         self._tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        hdr = self._tree.header()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionsMovable(False)
+        hdr.setMinimumSectionSize(40)
+        hdr.sectionResized.connect(self._save_column_widths)
+        self._restore_column_widths()
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._header)
@@ -102,6 +108,15 @@ class PacnewView(QWidget):
         self._header.setText(f"Pacnew — {len(files)} file(s) need attention")
         for f in files:
             self._add_row(f)
+
+    def _save_column_widths(self) -> None:
+        hdr = self._tree.header()
+        save_column_widths("ui/pacnew_columns", [hdr.sectionSize(1), hdr.sectionSize(2)])
+
+    def _restore_column_widths(self) -> None:
+        w1, w2 = load_column_widths("ui/pacnew_columns", [140, 120])
+        self._tree.header().resizeSection(1, w1)
+        self._tree.header().resizeSection(2, w2)
 
     def reset(self) -> None:
         self._tree.clear()

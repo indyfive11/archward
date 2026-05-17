@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from archward.models.gate import GateResult, GateStatus
+from archward.ui.persistent_state import load_column_widths, save_column_widths
 from archward.ui.theme import status_palette
 
 
@@ -37,9 +38,14 @@ class GatesView(QWidget):
         self._tree.setHeaderLabels(["Gate", "Status", "Message"])
         self._tree.setRootIsDecorated(False)
         self._tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr = self._tree.header()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionsMovable(False)
+        hdr.setMinimumSectionSize(40)
+        hdr.sectionResized.connect(self._save_column_widths)
+        self._restore_column_widths()
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._header)
@@ -58,6 +64,15 @@ class GatesView(QWidget):
                 item.addChild(child)
             self._tree.addTopLevelItem(item)
         self._tree.expandAll()
+
+    def _save_column_widths(self) -> None:
+        hdr = self._tree.header()
+        save_column_widths("ui/gates_columns", [hdr.sectionSize(0), hdr.sectionSize(1)])
+
+    def _restore_column_widths(self) -> None:
+        w0, w1 = load_column_widths("ui/gates_columns", [160, 60])
+        self._tree.header().resizeSection(0, w0)
+        self._tree.header().resizeSection(1, w1)
 
     def reset(self) -> None:
         self._tree.clear()

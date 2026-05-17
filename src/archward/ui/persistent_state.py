@@ -87,3 +87,17 @@ def set_wizard_completed() -> None:
     s = _settings()
     s.setValue(_KEY_WIZARD_DONE, True)
     s.sync()
+
+
+def save_column_widths(key: str, widths: list[int]) -> None:
+    _settings().setValue(key, ",".join(str(w) for w in widths))
+
+
+def load_column_widths(key: str, defaults: list[int]) -> list[int]:
+    raw = str(_settings().value(key, "", type=str))
+    if not raw:
+        return defaults
+    try:
+        return [int(x) for x in raw.split(",")]
+    except ValueError:
+        return defaults

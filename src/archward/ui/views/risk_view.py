@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from archward.models.update import PendingUpdate, RiskLevel
+from archward.ui.persistent_state import load_column_widths, save_column_widths
 from archward.ui.theme import status_palette
 
 
@@ -58,9 +59,14 @@ class RiskView(QWidget):
         self._tree.setHeaderLabels(["Package", "Old → New", "Reason"])
         self._tree.setRootIsDecorated(True)
         self._tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr = self._tree.header()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionsMovable(False)
+        hdr.setMinimumSectionSize(40)
+        hdr.sectionResized.connect(self._save_column_widths)
+        self._restore_column_widths()
 
         # Decision buttons — disabled by default; the prompter enables them
         # via enable_decision() when waiting for user input.
@@ -183,6 +189,15 @@ class RiskView(QWidget):
                     if isinstance(name, str) and name:
                         deselected.append(name)
         return deselected
+
+    def _save_column_widths(self) -> None:
+        hdr = self._tree.header()
+        save_column_widths("ui/risk_columns", [hdr.sectionSize(0), hdr.sectionSize(1)])
+
+    def _restore_column_widths(self) -> None:
+        w0, w1 = load_column_widths("ui/risk_columns", [200, 180])
+        self._tree.header().resizeSection(0, w0)
+        self._tree.header().resizeSection(1, w1)
 
     def _on_proceed(self) -> None:
         deselected = self.collect_deselected()
