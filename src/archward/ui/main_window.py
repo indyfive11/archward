@@ -23,8 +23,8 @@ import logging
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QSettings, QThread, Signal
+from PySide6.QtGui import QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QSplitterHandle,
     QStackedWidget,
     QStatusBar,
     QToolBar,
@@ -87,6 +88,24 @@ _PHASE_TO_VIEW = {
     "verify": "verify",
     "hooks_post": "verify",
 }
+
+
+class _GripHandle(QSplitterHandle):
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        from archward.ui.theme import brand_palette
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(brand_palette().accent_fg, 1))
+        cx = self.width() // 2
+        cy = self.height() // 2
+        for dx in (-5, 0, 5):
+            painter.drawEllipse(cx + dx - 2, cy - 2, 4, 4)
+
+
+class _GripSplitter(QSplitter):
+    def createHandle(self) -> QSplitterHandle:
+        return _GripHandle(self.orientation(), self)
 
 
 class WarmupWorker(QThread):
@@ -223,8 +242,7 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentWidget(self._views["snapshot"])
 
         self._rail = PhaseRail()
-        self._rail.setMinimumWidth(220)
-        self._rail.setMaximumWidth(280)
+        self._rail.setMinimumWidth(180)
         self._rail.phase_clicked.connect(self._on_rail_clicked)
         self._log = LogPane()
         self._result_banner = ResultBanner()
@@ -250,7 +268,11 @@ class MainWindow(QMainWindow):
         log_container_layout.addWidget(self._log)
 
         # Vertical splitter: stacked-view (top) + log (bottom, collapsible).
-        right_split = QSplitter(Qt.Orientation.Vertical)
+        right_split = _GripSplitter(Qt.Orientation.Vertical)
+        right_split.setHandleWidth(10)
+        right_split.setStyleSheet("""
+            QSplitter::handle:vertical:hover { background-color: palette(highlight); }
+        """)
         right_split.addWidget(self._stack)
         right_split.addWidget(log_container)
         right_split.setStretchFactor(0, 3)
@@ -264,6 +286,15 @@ class MainWindow(QMainWindow):
         main_split.setStretchFactor(0, 0)
         main_split.setStretchFactor(1, 1)
         main_split.setSizes([240, 960])
+
+        # Restore persisted splitter positions (overrides defaults above).
+        _s = QSettings()
+        if (_rs := _s.value("ui/right_split_sizes")):
+            right_split.setSizes([int(x) for x in str(_rs).split(",")])
+        if (_ms := _s.value("ui/main_split_sizes")):
+            main_split.setSizes([int(x) for x in str(_ms).split(",")])
+        self._right_split = right_split
+        self._main_split = main_split
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -684,6 +715,9 @@ class MainWindow(QMainWindow):
     # ── Window lifecycle ───────────────────────────────────────────────────
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        _s = QSettings()
+        _s.setValue("ui/right_split_sizes", ",".join(str(x) for x in self._right_split.sizes()))
+        _s.setValue("ui/main_split_sizes", ",".join(str(x) for x in self._main_split.sizes()))
         if self.worker is not None and self.worker.isRunning():
             self.worker.cancel_event.set()
             # If the worker is blocked waiting on a HIGH-risk decision the
