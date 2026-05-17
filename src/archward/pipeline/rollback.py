@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -49,7 +50,7 @@ PACMAN_CACHE_DIR = Path("/var/cache/pacman/pkg")
 class RollbackOp:
     """A discrete rollback action queued by the UI."""
 
-    kind: Literal["restore_config", "downgrade_package"]
+    kind: Literal["restore_config", "downgrade_package", "reinstall_from_repos", "reinstall_from_aur"]
     target: str                 # file path (for restore_config) or pkg name (for downgrade)
     from_version: str | None    # current version (informational)
     to_version: str | None      # target version (for downgrade)
@@ -61,6 +62,17 @@ class RollbackResult:
     op: RollbackOp
     success: bool
     message: str
+
+
+@dataclass(frozen=True)
+class RemovedPackage:
+    """A package present in a snapshot's all.txt that is no longer installed."""
+
+    name: str
+    snapshot_version: str
+    was_explicit: bool   # listed in explicit.txt at snapshot time
+    was_aur: bool        # listed in aur.txt at snapshot time
+    cache_path: Path | None  # exact snapshot version in /var/cache/pacman/pkg/, or None
 
 
 # ── Snapshot reading ─────────────────────────────────────────────────────
@@ -124,6 +136,49 @@ def read_installed_packages_at_snapshot(snapshot_path: Path) -> dict[str, str]:
         if len(parts) == 2:
             out[parts[0]] = parts[1]
     return out
+
+
+def packages_removed_since_snapshot(snapshot_path: Path) -> list[RemovedPackage]:
+    """Return packages present in the snapshot but no longer installed.
+
+    Sorted so explicitly-installed packages come before deps, so reinstalling
+    a parent package pulls in its deps automatically via pacman's dependency
+    resolution.
+    """
+    from archward.pacman import query as pq
+
+    snap_pkgs = read_installed_packages_at_snapshot(snapshot_path)
+    if not snap_pkgs:
+        return []
+
+    installed = {name for name, _ in pq.list_all()}
+    removed_names = {name for name in snap_pkgs if name not in installed}
+    if not removed_names:
+        return []
+
+    explicit: set[str] = set()
+    explicit_txt = snapshot_path / "packages" / "explicit.txt"
+    if explicit_txt.exists():
+        explicit = {ln.strip() for ln in explicit_txt.read_text().splitlines() if ln.strip()}
+
+    aur_names: set[str] = set()
+    aur_txt = snapshot_path / "packages" / "aur.txt"
+    if aur_txt.exists():
+        for line in aur_txt.read_text().splitlines():
+            parts = line.strip().split()
+            if parts:
+                aur_names.add(parts[0])
+
+    result: list[RemovedPackage] = []
+    for name in sorted(removed_names, key=lambda n: (0 if n in explicit else 1, n)):
+        result.append(RemovedPackage(
+            name=name,
+            snapshot_version=snap_pkgs[name],
+            was_explicit=(name in explicit),
+            was_aur=(name in aur_names),
+            cache_path=find_package_in_cache(name, snap_pkgs[name]),
+        ))
+    return result
 
 
 def critical_packages_with_kernel_fallback(
@@ -482,3 +537,38 @@ def downgrade_package(op: RollbackOp, strategy: SudoStrategy) -> RollbackResult:
     if code != 0:
         return RollbackResult(op, False, f"pacman -U failed: {err.strip()}")
     return RollbackResult(op, True, f"downgraded {op.target} to {op.to_version}")
+
+
+def reinstall_from_repos(op: RollbackOp, strategy: SudoStrategy) -> RollbackResult:
+    """Reinstall `op.target` from official repos via `pacman -S --noconfirm`."""
+    code, _, err = run_capture(
+        ["pacman", "-S", "--noconfirm", op.target],
+        strategy=strategy,
+    )
+    if code != 0:
+        return RollbackResult(op, False, f"pacman -S failed: {err.strip()}")
+    return RollbackResult(op, True, f"reinstalled {op.target} from repos")
+
+
+def reinstall_from_aur(
+    op: RollbackOp, helper_name: str, strategy: SudoStrategy
+) -> RollbackResult:
+    """Reinstall `op.target` from the AUR via the named helper.
+
+    AUR helpers run as the invoking user (not root) and escalate internally,
+    so this uses subprocess directly with the strategy's env (SUDO_ASKPASS) rather
+    than run_capture which would add an unwanted sudo prefix.
+    """
+    try:
+        r = subprocess.run(
+            [helper_name, "-S", "--noconfirm", op.target],
+            capture_output=True,
+            text=True,
+            env=strategy.env(),
+            timeout=300,
+        )
+    except Exception as e:  # noqa: BLE001
+        return RollbackResult(op, False, str(e))
+    if r.returncode == 0:
+        return RollbackResult(op, True, f"reinstalled {op.target} from AUR via {helper_name}")
+    return RollbackResult(op, False, (r.stdout + r.stderr).strip())
