@@ -138,20 +138,23 @@ def read_installed_packages_at_snapshot(snapshot_path: Path) -> dict[str, str]:
     return out
 
 
-def packages_removed_since_snapshot(snapshot_path: Path) -> list[RemovedPackage]:
+def packages_removed_since_snapshot(
+    snapshot_path: Path,
+    installed: dict[str, str] | None = None,
+) -> list[RemovedPackage]:
     """Return packages present in the snapshot but no longer installed.
 
-    Sorted so explicitly-installed packages come before deps, so reinstalling
-    a parent package pulls in its deps automatically via pacman's dependency
-    resolution.
+    Pass `installed` (from a prior pq.list_all() call) to skip the subprocess.
+    Sorted so explicitly-installed packages come before deps.
     """
-    from archward.pacman import query as pq
+    if installed is None:
+        from archward.pacman import query as pq
+        installed = dict(pq.list_all())
 
     snap_pkgs = read_installed_packages_at_snapshot(snapshot_path)
     if not snap_pkgs:
         return []
 
-    installed = {name for name, _ in pq.list_all()}
     removed_names = {name for name in snap_pkgs if name not in installed}
     if not removed_names:
         return []

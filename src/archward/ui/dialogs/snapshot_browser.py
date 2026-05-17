@@ -212,6 +212,8 @@ class SnapshotBrowser(QDialog):
         self._strategy = strategy
         self._bus = bus
         self._installed_versions: dict[str, str] = {}
+        self._removed_scan_snap: Path | None = None
+        self._removed_worker: _RollbackWorker | None = None
 
         # ── Left: snapshot list ────────────────────────────────────────────
         self._snap_list = QListWidget()
@@ -531,6 +533,11 @@ class SnapshotBrowser(QDialog):
             )
         self._meta_label.setText("<br>".join(meta_lines))
 
+        # Query installed packages once; both _render_critical_packages and
+        # _render_removed_packages use this dict so pacman -Q runs only once
+        # per snapshot selection instead of twice.
+        self._installed_versions = {n: v for n, v in pq.list_all()}
+
         self._render_configs(snap_path)
         self._render_critical_packages(snap_path)
         self._render_removed_packages(snap_path)
@@ -639,9 +646,6 @@ class SnapshotBrowser(QDialog):
         )
         self._pkgs_label.setText(f"Critical packages at snapshot time ({len(pkgs)}):")
 
-        # Re-query live versions so we can show "current → snapshot" deltas.
-        self._installed_versions = {n: v for n, v in pq.list_all()}
-
         for name, snap_version in pkgs:
             current = self._installed_versions.get(name, "(not installed)")
             same = current == snap_version
@@ -682,9 +686,36 @@ class SnapshotBrowser(QDialog):
             self._pkgs_tree.setItemWidget(item, 3, actions)
 
     def _render_removed_packages(self, snap_path: Path) -> None:
-        """Show packages present in the snapshot but no longer installed."""
+        """Start an off-thread scan for packages removed since `snap_path`.
+
+        Shows a "Scanning…" placeholder immediately so the rest of the detail
+        panel is visible while the worker runs.  Stale results (user switched
+        snapshot before scan finished) are silently discarded.
+        """
         self._removed_tree.clear()
-        removed = packages_removed_since_snapshot(snap_path)
+        self._removed_label.setText("Scanning for removed packages…")
+        self._removed_section.show()
+        self._removed_scan_snap = snap_path
+
+        installed_snapshot = dict(self._installed_versions)
+        worker = _RollbackWorker(
+            fn=lambda: packages_removed_since_snapshot(snap_path, installed=installed_snapshot),
+            parent=self,
+        )
+        self._removed_worker = worker
+        worker.finished_with_result.connect(
+            lambda result, sp=snap_path: self._on_removed_scan_done(result, sp)
+        )
+        worker.start()
+
+    def _on_removed_scan_done(self, result: object, snap_path: Path) -> None:
+        """Populate the removed-packages tree; discard if a newer scan superseded this one."""
+        if snap_path != self._removed_scan_snap:
+            return
+        if isinstance(result, Exception) or not isinstance(result, list):
+            self._removed_section.hide()
+            return
+        removed: list[RemovedPackage] = result
         if not removed:
             self._removed_section.hide()
             return
@@ -756,8 +787,6 @@ class SnapshotBrowser(QDialog):
 
             actions.layout().addStretch(1)
             self._removed_tree.setItemWidget(item, 3, actions)
-
-        self._removed_section.show()
 
     def _on_reinstall(
         self,
