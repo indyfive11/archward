@@ -3,14 +3,14 @@
 Lists orphaned packages (those installed as deps but no longer required),
 lets the user select which to remove, takes a safety snapshot if the most
 recent pre-snapshot is older than _SNAPSHOT_THRESHOLD_MINUTES, then runs
-`pacman -Rs` in a background thread with live output streamed to a log area.
+`pacman -Rs` — all in a single background worker so the Qt main thread
+is never blocked and the Wayland compositor keeps receiving events.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
@@ -57,31 +57,64 @@ def _latest_pre_snapshot_age_minutes(cfg: ConfigModel) -> float | None:
 
 
 class _RemovalWorker(QThread):
-    line_ready = Signal(str)
-    finished_ok = Signal(bool, str)  # (success, combined_output)
+    """Background worker: optional safety snapshot then pacman -Rs.
 
-    def __init__(self, strategy: SudoStrategy, packages: list[str], parent=None) -> None:
+    Runs entirely off the main thread so archward's Wayland connection
+    stays live and ksshaskpass can receive keyboard focus.
+    """
+
+    line_ready = Signal(str)
+    finished_ok = Signal(bool)
+
+    def __init__(
+        self,
+        cfg: ConfigModel,
+        strategy: SudoStrategy,
+        packages: list[str],
+        needs_snap: bool,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
+        self._cfg = cfg
         self._strategy = strategy
         self._packages = packages
+        self._needs_snap = needs_snap
 
     def run(self) -> None:
-        from archward.pacman.runner import run_capture
-        rc, out, err = run_capture(
-            ["pacman", "-Rs", "--noconfirm", *self._packages],
-            strategy=self._strategy,
-        )
+        if self._needs_snap:
+            self.line_ready.emit("Taking safety snapshot…")
+            try:
+                from archward.events import EventBus
+                from archward.pipeline.snapshot import take_snapshot
+                take_snapshot(self._cfg, self._strategy, EventBus())
+                self.line_ready.emit("Snapshot complete.")
+            except Exception as e:  # noqa: BLE001
+                log.exception("safety snapshot failed in orphan removal")
+                self.line_ready.emit(f"Snapshot failed: {e}")
+                self.finished_ok.emit(False)
+                return
+
+        self.line_ready.emit(f"Removing: {', '.join(self._packages)}")
+        try:
+            from archward.pacman.runner import run_capture
+            rc, out, err = run_capture(
+                ["pacman", "-Rs", "--noconfirm", *self._packages],
+                strategy=self._strategy,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception("run_capture raised during orphan removal")
+            self.line_ready.emit(f"Error: {e}")
+            self.finished_ok.emit(False)
+            return
+
         combined = (out + err).strip()
         for line in combined.splitlines():
             self.line_ready.emit(line)
-        self.finished_ok.emit(rc == 0, combined)
+        self.finished_ok.emit(rc == 0)
 
 
 class _ScanWorker(QThread):
     scan_done = Signal(list)  # list[str] of orphan names
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
 
     def run(self) -> None:
         import subprocess
@@ -174,6 +207,16 @@ class OrphanManagerDialog(QDialog):
             self._populate(orphans)
         else:
             self._start_scan()
+
+    # ── Close / cleanup ────────────────────────────────────────────────────
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self._scan_worker and self._scan_worker.isRunning():
+            self._scan_worker.wait(2000)
+        if self._worker and self._worker.isRunning():
+            # Wait briefly; pacman -Rs can't be safely interrupted mid-run.
+            self._worker.wait(5000)
+        super().closeEvent(event)
 
     # ── List management ────────────────────────────────────────────────────
 
@@ -269,32 +312,22 @@ class OrphanManagerDialog(QDialog):
         if not packages:
             return
 
-        age = _latest_pre_snapshot_age_minutes(self._cfg)
-        needs_snap = age is None or age > _SNAPSHOT_THRESHOLD_MINUTES
-
-        if needs_snap:
-            from archward.events import EventBus
-            from archward.pipeline.snapshot import take_snapshot
-            self._output.setVisible(True)
-            self._output.appendPlainText("Taking safety snapshot…")
-            try:
-                take_snapshot(self._cfg, self._strategy, EventBus())
-                self._output.appendPlainText("Snapshot complete.")
-            except Exception as e:  # noqa: BLE001
-                QMessageBox.critical(self, "Snapshot failed", str(e))
-                return
-
+        # Disable both buttons immediately — before any background work starts.
         self._remove_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
         self._output.setVisible(True)
-        self._output.appendPlainText(f"Removing: {', '.join(packages)}")
 
-        self._worker = _RemovalWorker(self._strategy, packages, parent=self)
+        age = _latest_pre_snapshot_age_minutes(self._cfg)
+        needs_snap = age is None or age > _SNAPSHOT_THRESHOLD_MINUTES
+
+        self._worker = _RemovalWorker(
+            self._cfg, self._strategy, packages, needs_snap, parent=self
+        )
         self._worker.line_ready.connect(self._output.appendPlainText)
         self._worker.finished_ok.connect(self._on_removal_done)
         self._worker.start()
 
-    def _on_removal_done(self, success: bool, _output: str) -> None:
+    def _on_removal_done(self, success: bool) -> None:
         self._cancel_btn.setText("Close")
         self._cancel_btn.setEnabled(True)
         if success:
