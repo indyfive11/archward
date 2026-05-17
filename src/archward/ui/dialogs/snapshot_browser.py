@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QSettings, QThread, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 from archward.events import EventBus
 from archward.models.config import ConfigModel
 from archward.pacman import query as pq
+from archward.ui.grip_splitter import GripSplitter
 from archward.pipeline.rollback import (
     BOOT_CRITICAL,
     BulkResult,
@@ -262,7 +263,6 @@ class SnapshotBrowser(QDialog):
 
         self._removed_label = QLabel("")
         self._removed_label.setStyleSheet("font-weight: bold; padding: 8px 8px 4px 8px;")
-        self._removed_label.hide()
         self._removed_tree = QTreeWidget()
         self._removed_tree.setColumnCount(4)
         self._removed_tree.setHeaderLabels(["Package", "Snapshot Version", "Type", "Action"])
@@ -271,7 +271,6 @@ class SnapshotBrowser(QDialog):
         self._removed_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self._removed_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._removed_tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self._removed_tree.hide()
 
         self._delta_label = QLabel("")
         self._delta_label.setStyleSheet("font-weight: bold; padding: 8px 8px 4px 8px;")
@@ -287,28 +286,59 @@ class SnapshotBrowser(QDialog):
         self._delta_view_all_btn = QPushButton()
         self._delta_view_all_btn.hide()
 
+        # ── Wrap each resizable section in a container for the detail splitter ─
+        configs_section = QWidget()
+        _cl = QVBoxLayout(configs_section)
+        _cl.setContentsMargins(0, 0, 0, 0)
+        _cl.addWidget(self._configs_label)
+        _cl.addWidget(self._configs_tree, stretch=1)
+        _cl.addWidget(self._bulk_configs_btn)
+
+        pkgs_section = QWidget()
+        _pl = QVBoxLayout(pkgs_section)
+        _pl.setContentsMargins(0, 0, 0, 0)
+        _pl.addWidget(self._pkgs_label)
+        _pl.addWidget(self._pkgs_tree, stretch=1)
+        _pl.addWidget(self._bulk_pkgs_btn)
+
+        self._removed_section = QWidget()
+        _rl = QVBoxLayout(self._removed_section)
+        _rl.setContentsMargins(0, 0, 0, 0)
+        _rl.addWidget(self._removed_label)
+        _rl.addWidget(self._removed_tree, stretch=1)
+        self._removed_section.hide()
+
+        self._detail_split = GripSplitter(Qt.Orientation.Vertical)
+        self._detail_split.addWidget(configs_section)
+        self._detail_split.addWidget(pkgs_section)
+        self._detail_split.addWidget(self._removed_section)
+        self._detail_split.setStretchFactor(0, 1)
+        self._detail_split.setStretchFactor(1, 1)
+        self._detail_split.setStretchFactor(2, 1)
+        self._detail_split.setSizes([200, 200, 0])
+
         right_box = QWidget()
         right_layout = QVBoxLayout(right_box)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.addWidget(self._meta_label)
-        right_layout.addWidget(self._configs_label)
-        right_layout.addWidget(self._configs_tree, stretch=1)
-        right_layout.addWidget(self._bulk_configs_btn)
-        right_layout.addWidget(self._pkgs_label)
-        right_layout.addWidget(self._pkgs_tree, stretch=1)
-        right_layout.addWidget(self._bulk_pkgs_btn)
-        right_layout.addWidget(self._removed_label)
-        right_layout.addWidget(self._removed_tree, stretch=1)
+        right_layout.addWidget(self._detail_split, stretch=1)
         right_layout.addWidget(self._delta_label)
         right_layout.addWidget(self._delta_viewer)
         right_layout.addWidget(self._delta_view_all_btn)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._snap_list)
-        splitter.addWidget(right_box)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([300, 800])
+        # Restore persisted detail-split sizes.
+        _s = QSettings()
+        if (_ds := _s.value("ui/snapshot_detail_split")):
+            self._detail_split.setSizes([int(x) for x in str(_ds).split(",")])
+
+        self._horiz_split = GripSplitter(Qt.Orientation.Horizontal)
+        self._horiz_split.addWidget(self._snap_list)
+        self._horiz_split.addWidget(right_box)
+        self._horiz_split.setStretchFactor(0, 0)
+        self._horiz_split.setStretchFactor(1, 1)
+        self._horiz_split.setSizes([300, 800])
+        if (_hs := _s.value("ui/snapshot_horiz_split")):
+            self._horiz_split.setSizes([int(x) for x in str(_hs).split(",")])
 
         prune_btn = QPushButton("Prune now…")
         prune_btn.setToolTip(
@@ -327,10 +357,16 @@ class SnapshotBrowser(QDialog):
         bottom_row.addWidget(close)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(splitter, stretch=1)
+        layout.addWidget(self._horiz_split, stretch=1)
         layout.addLayout(bottom_row)
 
         self._populate_snapshots()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        s = QSettings()
+        s.setValue("ui/snapshot_horiz_split", ",".join(str(x) for x in self._horiz_split.sizes()))
+        s.setValue("ui/snapshot_detail_split", ",".join(str(x) for x in self._detail_split.sizes()))
+        super().closeEvent(event)
 
     # ── Prune action (F6, v0.4.0) ──────────────────────────────────────────
 
@@ -650,14 +686,12 @@ class SnapshotBrowser(QDialog):
         self._removed_tree.clear()
         removed = packages_removed_since_snapshot(snap_path)
         if not removed:
-            self._removed_label.hide()
-            self._removed_tree.hide()
+            self._removed_section.hide()
             return
 
         self._removed_label.setText(
             f"Removed since snapshot ({len(removed)} package{'s' if len(removed) != 1 else ''}):"
         )
-        self._removed_label.show()
 
         from archward.aur.helper import discover
         helper = discover(tuple(self._cfg.aur.helper_preference))
@@ -723,7 +757,7 @@ class SnapshotBrowser(QDialog):
             actions.layout().addStretch(1)
             self._removed_tree.setItemWidget(item, 3, actions)
 
-        self._removed_tree.show()
+        self._removed_section.show()
 
     def _on_reinstall(
         self,

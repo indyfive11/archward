@@ -24,15 +24,13 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSettings, QThread, Signal
-from PySide6.QtGui import QKeySequence, QPainter, QPen, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
     QSizePolicy,
-    QSplitter,
-    QSplitterHandle,
     QStackedWidget,
     QStatusBar,
     QToolBar,
@@ -55,6 +53,7 @@ from archward.system import notify
 from archward.system.distro import detect_distro
 from archward.ui.dialogs.preferences import PreferencesDialog
 from archward.ui.dialogs.snapshot_browser import SnapshotBrowser
+from archward.ui.grip_splitter import GripSplitter
 from archward.ui.log_pane import LogPane
 from archward.ui.phase_rail import PhaseRail
 from archward.ui.prompter import GuiPrompter, PkgbuildPrompter, UpdatePrompter
@@ -89,23 +88,6 @@ _PHASE_TO_VIEW = {
     "hooks_post": "verify",
 }
 
-
-class _GripHandle(QSplitterHandle):
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        from archward.ui.theme import brand_palette
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(brand_palette().accent_fg, 1))
-        cx = self.width() // 2
-        cy = self.height() // 2
-        for dx in (-5, 0, 5):
-            painter.drawEllipse(cx + dx - 2, cy - 2, 4, 4)
-
-
-class _GripSplitter(QSplitter):
-    def createHandle(self) -> QSplitterHandle:
-        return _GripHandle(self.orientation(), self)
 
 
 class WarmupWorker(QThread):
@@ -268,11 +250,7 @@ class MainWindow(QMainWindow):
         log_container_layout.addWidget(self._log)
 
         # Vertical splitter: stacked-view (top) + log (bottom, collapsible).
-        right_split = _GripSplitter(Qt.Orientation.Vertical)
-        right_split.setHandleWidth(10)
-        right_split.setStyleSheet("""
-            QSplitter::handle:vertical:hover { background-color: palette(highlight); }
-        """)
+        right_split = GripSplitter(Qt.Orientation.Vertical)
         right_split.addWidget(self._stack)
         right_split.addWidget(log_container)
         right_split.setStretchFactor(0, 3)
@@ -280,7 +258,7 @@ class MainWindow(QMainWindow):
         right_split.setSizes([550, 180])
 
         # Horizontal splitter: rail + right-side stack.
-        main_split = QSplitter(Qt.Orientation.Horizontal)
+        main_split = GripSplitter(Qt.Orientation.Horizontal)
         main_split.addWidget(self._rail)
         main_split.addWidget(right_split)
         main_split.setStretchFactor(0, 0)
