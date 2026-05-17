@@ -1,20 +1,23 @@
 """Orphan package manager dialog.
 
 Lists orphaned packages (those installed as deps but no longer required),
-lets the user select which to remove, takes a safety snapshot if the most
-recent pre-snapshot is older than _SNAPSHOT_THRESHOLD_MINUTES, then runs
-`pacman -Rs` — all in a single background worker so the Qt main thread
-is never blocked and the Wayland compositor keeps receiving events.
+lets the user select which to remove, runs a dry-run preview showing ALL
+packages that pacman -Rs will actually touch (including cascaded deps),
+asks for explicit confirmation, then removes in a background worker thread
+(snapshot first if the most recent pre-snapshot is older than
+_SNAPSHOT_THRESHOLD_MINUTES).
 """
 
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -54,6 +57,38 @@ def _latest_pre_snapshot_age_minutes(cfg: ConfigModel) -> float | None:
     except (ValueError, OSError):
         return None
     return (time.time() - ts) / 60
+
+
+def _dry_run_removal(packages: list[str]) -> list[str]:
+    """Return the full list of packages pacman -Rs would remove (dry-run).
+
+    Uses `pacman -Rsp <pkgs>` (print mode) which outputs one package name
+    per line without actually touching the system.  Returns an empty list
+    if pacman is unavailable or the dry-run itself fails.
+    """
+    try:
+        r = subprocess.run(
+            ["pacman", "-Rsp", *packages],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        # pacman --print emits "pkgname-version" lines; strip the version so we
+        # get plain names that match what's in the checkbox list.
+        names: list[str] = []
+        for line in lines:
+            # Format is "pkgname-pkgver-pkgrel" — strip from the last hyphen-digit.
+            # Simplest robust approach: strip from the second-to-last hyphen.
+            parts = line.rsplit("-", 2)
+            if len(parts) >= 2:
+                names.append(parts[0])
+            else:
+                names.append(line)
+        return names
+    except Exception:  # noqa: BLE001
+        return []
 
 
 class _RemovalWorker(QThread):
@@ -117,7 +152,6 @@ class _ScanWorker(QThread):
     scan_done = Signal(list)  # list[str] of orphan names
 
     def run(self) -> None:
-        import subprocess
         try:
             r = subprocess.run(
                 ["pacman", "-Qdtq"],
@@ -142,7 +176,7 @@ class OrphanManagerDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Orphan Package Manager")
-        self.setMinimumSize(520, 400)
+        self.setMinimumSize(560, 420)
         self._cfg = cfg
         self._strategy = strategy
         self._worker: _RemovalWorker | None = None
@@ -185,7 +219,7 @@ class OrphanManagerDialog(QDialog):
 
         # ── Footer buttons ────────────────────────────────────────────────
         self._cancel_btn = QPushButton("Cancel")
-        self._remove_btn = QPushButton("Remove Selected")
+        self._remove_btn = QPushButton("Remove Selected…")
         self._remove_btn.setEnabled(False)
         self._cancel_btn.clicked.connect(self.reject)
         self._remove_btn.clicked.connect(self._on_remove_clicked)
@@ -214,7 +248,6 @@ class OrphanManagerDialog(QDialog):
         if self._scan_worker and self._scan_worker.isRunning():
             self._scan_worker.wait(2000)
         if self._worker and self._worker.isRunning():
-            # Wait briefly; pacman -Rs can't be safely interrupted mid-run.
             self._worker.wait(5000)
         super().closeEvent(event)
 
@@ -287,9 +320,9 @@ class OrphanManagerDialog(QDialog):
         count = len(self._checked_names())
         self._remove_btn.setEnabled(count > 0)
         if count:
-            self._remove_btn.setText(f"Remove Selected ({count} pkg{'s' if count != 1 else ''})")
+            self._remove_btn.setText(f"Remove Selected… ({count} pkg{'s' if count != 1 else ''})")
         else:
-            self._remove_btn.setText("Remove Selected")
+            self._remove_btn.setText("Remove Selected…")
 
     def _update_snap_banner(self) -> None:
         age = _latest_pre_snapshot_age_minutes(self._cfg)
@@ -312,7 +345,37 @@ class OrphanManagerDialog(QDialog):
         if not packages:
             return
 
-        # Disable both buttons immediately — before any background work starts.
+        # Dry-run: find out what pacman -Rs will ACTUALLY remove (may include
+        # cascaded deps of the selected packages that are also orphaned).
+        full_list = _dry_run_removal(packages)
+
+        # If the dry-run found additional packages beyond what the user selected,
+        # surface them explicitly so there are no surprises.
+        cascaded = [p for p in full_list if p not in packages]
+
+        if full_list:
+            msg = _build_confirm_message(packages, cascaded)
+        else:
+            # dry-run failed (pacman unavailable?) — fall back to listing selected only.
+            msg = (
+                f"<b>Remove {len(packages)} package{'s' if len(packages) != 1 else ''}?</b>"
+                f"<br><br>{', '.join(sorted(packages))}"
+                "<br><br>This action cannot be undone (a safety snapshot will be taken first)."
+            )
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Confirm removal")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(msg)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+        box.button(QMessageBox.StandardButton.Ok).setText("Remove")
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return
+
+        # Confirmed — lock UI and start background worker.
         self._remove_btn.setEnabled(False)
         self._cancel_btn.setEnabled(False)
         self._output.setVisible(True)
@@ -339,3 +402,21 @@ class OrphanManagerDialog(QDialog):
                 self, "Removal failed",
                 "pacman -Rs returned a non-zero exit code. See the output log above."
             )
+
+
+def _build_confirm_message(selected: list[str], cascaded: list[str]) -> str:
+    """Build the confirmation message shown before removal."""
+    sel_str = ", ".join(sorted(selected))
+    lines = [
+        f"<b>Remove {len(selected)} selected package{'s' if len(selected) != 1 else ''}?</b>",
+        f"<br>{sel_str}",
+    ]
+    if cascaded:
+        casc_str = ", ".join(sorted(cascaded))
+        lines += [
+            f"<br><br><b>pacman will also remove {len(cascaded)} cascaded "
+            f"dep{'s' if len(cascaded) != 1 else ''} with no other dependants:</b>",
+            f"<br>{casc_str}",
+        ]
+    lines.append("<br><br>A safety snapshot will be taken first.")
+    return "".join(lines)
