@@ -54,14 +54,18 @@ from archward.pacman import query as pq
 from archward.pipeline.rollback import (
     BOOT_CRITICAL,
     BulkResult,
+    RemovedPackage,
     RollbackOp,
     apply_all_packages,
     critical_packages_with_kernel_fallback,
     downgrade_package,
     find_package_in_cache,
     list_snapshot_configs,
+    packages_removed_since_snapshot,
     parse_critical_packages,
     plan_bulk_package_apply,
+    reinstall_from_aur,
+    reinstall_from_repos,
     restore_all_configs,
     restore_config,
 )
@@ -256,6 +260,19 @@ class SnapshotBrowser(QDialog):
         )
         self._bulk_pkgs_btn.clicked.connect(self._on_bulk_apply_packages)
 
+        self._removed_label = QLabel("")
+        self._removed_label.setStyleSheet("font-weight: bold; padding: 8px 8px 4px 8px;")
+        self._removed_label.hide()
+        self._removed_tree = QTreeWidget()
+        self._removed_tree.setColumnCount(4)
+        self._removed_tree.setHeaderLabels(["Package", "Snapshot Version", "Type", "Action"])
+        self._removed_tree.setRootIsDecorated(False)
+        self._removed_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._removed_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self._removed_tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self._removed_tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self._removed_tree.hide()
+
         self._delta_label = QLabel("")
         self._delta_label.setStyleSheet("font-weight: bold; padding: 8px 8px 4px 8px;")
         self._delta_label.hide()
@@ -280,6 +297,8 @@ class SnapshotBrowser(QDialog):
         right_layout.addWidget(self._pkgs_label)
         right_layout.addWidget(self._pkgs_tree, stretch=1)
         right_layout.addWidget(self._bulk_pkgs_btn)
+        right_layout.addWidget(self._removed_label)
+        right_layout.addWidget(self._removed_tree, stretch=1)
         right_layout.addWidget(self._delta_label)
         right_layout.addWidget(self._delta_viewer)
         right_layout.addWidget(self._delta_view_all_btn)
@@ -478,6 +497,7 @@ class SnapshotBrowser(QDialog):
 
         self._render_configs(snap_path)
         self._render_critical_packages(snap_path)
+        self._render_removed_packages(snap_path)
         self._render_post_delta(snap_path)
 
     def _hide_delta(self) -> None:
@@ -610,8 +630,11 @@ class SnapshotBrowser(QDialog):
                 lbl.setStyleSheet("color: palette(text); font-style: italic; padding-left: 6px;")
                 actions.layout().addWidget(lbl)
             else:
-                cmp = pq.vercmp(current, snap_version)
-                verb = "Downgrade" if cmp > 0 else "Upgrade"
+                if current == "(not installed)":
+                    verb = "Reinstall"
+                else:
+                    cmp = pq.vercmp(current, snap_version)
+                    verb = "Downgrade" if cmp > 0 else "Upgrade"
                 btn = self._small_btn(f"{verb} to {snap_version}")
                 btn.clicked.connect(
                     lambda *, n=name, v=snap_version, c=current, sp=snap_path:
@@ -621,6 +644,143 @@ class SnapshotBrowser(QDialog):
             actions.layout().addStretch(1)
             self._pkgs_tree.addTopLevelItem(item)
             self._pkgs_tree.setItemWidget(item, 3, actions)
+
+    def _render_removed_packages(self, snap_path: Path) -> None:
+        """Show packages present in the snapshot but no longer installed."""
+        self._removed_tree.clear()
+        removed = packages_removed_since_snapshot(snap_path)
+        if not removed:
+            self._removed_label.hide()
+            self._removed_tree.hide()
+            return
+
+        self._removed_label.setText(
+            f"Removed since snapshot ({len(removed)} package{'s' if len(removed) != 1 else ''}):"
+        )
+        self._removed_label.show()
+
+        from archward.aur.helper import discover
+        helper = discover(tuple(self._cfg.aur.helper_preference))
+        helper_name = helper.name if helper is not None else None
+
+        palette = status_palette()
+
+        for pkg in removed:
+            type_str = "explicit" if pkg.was_explicit else "dep"
+            item = QTreeWidgetItem([pkg.name, pkg.snapshot_version, type_str, ""])
+            self._removed_tree.addTopLevelItem(item)
+
+            actions = self._row_widget()
+            if pkg.cache_path is not None:
+                btn = self._small_btn(f"Reinstall (cached {pkg.snapshot_version})")
+                op = RollbackOp(
+                    kind="downgrade_package",
+                    target=pkg.name,
+                    from_version=None,
+                    to_version=pkg.snapshot_version,
+                    snapshot_path=snap_path,
+                )
+                btn.clicked.connect(
+                    lambda *, o=op, it=item, sp=snap_path:
+                    self._on_reinstall(o, it, sp, reinstall_kind="cached")
+                )
+                actions.layout().addWidget(btn)
+            elif not pkg.was_aur:
+                btn = self._small_btn("Reinstall from repos")
+                op = RollbackOp(
+                    kind="reinstall_from_repos",
+                    target=pkg.name,
+                    from_version=None,
+                    to_version=None,
+                    snapshot_path=snap_path,
+                )
+                btn.clicked.connect(
+                    lambda *, o=op, it=item, sp=snap_path:
+                    self._on_reinstall(o, it, sp, reinstall_kind="repos")
+                )
+                actions.layout().addWidget(btn)
+            elif helper_name is not None:
+                btn = self._small_btn(f"Reinstall from AUR ({helper_name})")
+                op = RollbackOp(
+                    kind="reinstall_from_aur",
+                    target=pkg.name,
+                    from_version=None,
+                    to_version=None,
+                    snapshot_path=snap_path,
+                )
+                btn.clicked.connect(
+                    lambda *, o=op, h=helper_name, it=item, sp=snap_path:
+                    self._on_reinstall(o, it, sp, reinstall_kind="aur", helper_name=h)
+                )
+                actions.layout().addWidget(btn)
+            else:
+                lbl = QLabel("Not available")
+                lbl.setStyleSheet(
+                    f"color: {palette.warn_fg.name()}; font-style: italic; padding-left: 6px;"
+                )
+                actions.layout().addWidget(lbl)
+
+            actions.layout().addStretch(1)
+            self._removed_tree.setItemWidget(item, 3, actions)
+
+        self._removed_tree.show()
+
+    def _on_reinstall(
+        self,
+        op: RollbackOp,
+        item: QTreeWidgetItem,
+        snap_path: Path,
+        *,
+        reinstall_kind: str,
+        helper_name: str = "",
+    ) -> None:
+        confirm = QMessageBox.question(
+            self,
+            f"Reinstall {op.target}",
+            f"Reinstall <b>{op.target}</b>?<br><br>"
+            + (
+                f"Source: cached version <code>{op.to_version}</code> "
+                "(via <code>pacman -U</code>)"
+                if reinstall_kind == "cached" else
+                "Source: official repos (via <code>pacman -S</code>)"
+                if reinstall_kind == "repos" else
+                f"Source: AUR via <code>{helper_name} -S</code>"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        if reinstall_kind == "cached":
+            fn = lambda: downgrade_package(op, self._strategy)
+        elif reinstall_kind == "repos":
+            fn = lambda: reinstall_from_repos(op, self._strategy)
+        else:
+            fn = lambda: reinstall_from_aur(op, helper_name, self._strategy)
+
+        self._run_off_thread(
+            fn=fn,
+            title=f"Reinstall {op.target}",
+            progress_label=f"Reinstalling {op.target}…",
+            on_done=lambda result: self._handle_reinstall_done(result, op.target, item, snap_path),
+        )
+
+    def _handle_reinstall_done(
+        self, result: object, pkg_name: str, item: QTreeWidgetItem, snap_path: Path
+    ) -> None:
+        if isinstance(result, Exception):
+            self._show_outcome(f"Reinstall {pkg_name}", False, f"Worker error: {result}")
+            return
+        self._log_action(result.message)
+        self._show_outcome(f"Reinstall {pkg_name}", result.success, result.message)
+        if result.success:
+            # Disable the row's action buttons — package is now installed.
+            actions_widget = self._removed_tree.itemWidget(item, 3)
+            if actions_widget is not None:
+                for btn in actions_widget.findChildren(QPushButton):
+                    btn.setEnabled(False)
+            item.setText(3, "reinstalled")
 
     # ── Action handlers ────────────────────────────────────────────────────
 
