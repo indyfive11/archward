@@ -202,6 +202,22 @@ def _attach_rollback_parser(subparsers) -> None:
         "Even with the flag, you must type YES on stdin.",
     )
 
+    reinstall_p = rb_sub.add_parser(
+        "reinstall",
+        help="List or reinstall packages removed since a snapshot.",
+    )
+    reinstall_p.add_argument("snapshot_id", help="Snapshot directory name.")
+    reinstall_p.add_argument(
+        "packages",
+        nargs="*",
+        metavar="pkg",
+        help="Specific packages to reinstall (default: all removed packages).",
+    )
+    reinstall_p.add_argument(
+        "--yes", action="store_true",
+        help="Skip confirmation prompt and reinstall immediately.",
+    )
+
 
 def _attach_pacnew_parser(subparsers) -> None:
     """`archward pacnew {list,diff,apply}` — manual .pacnew resolution."""
@@ -550,6 +566,8 @@ def _dispatch_subcommand(args, config_path) -> int:
             return cmd.cmd_all_configs(args, config_path)
         if args.rollback_action == "all-packages":
             return cmd.cmd_all_packages(args, config_path)
+        if args.rollback_action == "reinstall":
+            return cmd.cmd_reinstall(args, config_path)
         print("archward rollback: missing action — try `archward rollback --help`", file=sys.stderr)
         return 2
     if args.command == "pacnew":

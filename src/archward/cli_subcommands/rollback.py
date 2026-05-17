@@ -28,8 +28,12 @@ from archward.pipeline.rollback import (
     apply_all_packages,
     critical_packages_with_kernel_fallback,
     downgrade_package,
+    find_package_in_cache,
     list_snapshot_configs,
+    packages_removed_since_snapshot,
     plan_bulk_package_apply,
+    reinstall_from_aur,
+    reinstall_from_repos,
     restore_all_configs,
     restore_config,
 )
@@ -320,3 +324,88 @@ def cmd_all_packages(args, config_path: Path | None) -> int:
     )
     print(result.message)
     return 0 if result.success else 1
+
+
+# ── reinstall: restore removed packages ─────────────────────────────────
+
+
+def cmd_reinstall(args, config_path: Path | None) -> int:
+    """List or reinstall packages removed since a snapshot.
+
+    Without `--yes`: lists removed packages with their reinstall source.
+    With `--yes`: reinstalls all listed packages (or only those named as args.packages).
+    """
+    cfg = build_config(config_path)
+    snap_path = _resolve_snapshot_path(cfg, args.snapshot_id)
+    if snap_path is None:
+        return 3
+
+    removed = packages_removed_since_snapshot(snap_path)
+    if not removed:
+        print("No packages removed since this snapshot.")
+        return 0
+
+    # Filter to requested packages if specified.
+    if args.packages:
+        names = set(args.packages)
+        removed = [p for p in removed if p.name in names]
+        if not removed:
+            print(
+                f"None of the specified packages appear to be removed since {args.snapshot_id}.",
+                file=sys.stderr,
+            )
+            return 2
+
+    from archward.aur.helper import discover
+    helper = discover(tuple(cfg.aur.helper_preference))
+    helper_name = helper.name if helper is not None else None
+
+    # Describe each package and its reinstall path.
+    for pkg in removed:
+        if pkg.cache_path is not None:
+            source = f"cached ({pkg.snapshot_version})"
+        elif not pkg.was_aur:
+            source = "repos"
+        elif helper_name is not None:
+            source = f"AUR ({helper_name})"
+        else:
+            source = "unavailable (AUR, no helper)"
+        type_str = "explicit" if pkg.was_explicit else "dep"
+        print(f"  {pkg.name:30}  {pkg.snapshot_version:<20}  [{type_str}]  {source}")
+
+    if not args.yes:
+        print()
+        if not _stdin_y_n("reinstall the above? [y/N] "):
+            print("aborted.")
+            return 0
+
+    strategy = build_sudo_strategy(cfg)
+    failed = 0
+    for pkg in removed:
+        op = RollbackOp(
+            kind=(
+                "downgrade_package" if pkg.cache_path is not None
+                else "reinstall_from_repos" if not pkg.was_aur
+                else "reinstall_from_aur"
+            ),
+            target=pkg.name,
+            from_version=None,
+            to_version=pkg.snapshot_version if pkg.cache_path is not None else None,
+            snapshot_path=snap_path,
+        )
+        print(f"reinstalling {pkg.name} ...", end=" ", flush=True)
+        if pkg.cache_path is not None:
+            result = downgrade_package(op, strategy)
+        elif not pkg.was_aur:
+            result = reinstall_from_repos(op, strategy)
+        elif helper_name is not None:
+            result = reinstall_from_aur(op, helper_name, strategy)
+        else:
+            print(f"SKIP (AUR package, no helper available)", file=sys.stderr)
+            continue
+        if result.success:
+            print("OK")
+        else:
+            print(f"FAIL: {result.message}", file=sys.stderr)
+            failed += 1
+    return 0 if failed == 0 else 1
