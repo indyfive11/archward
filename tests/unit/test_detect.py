@@ -255,6 +255,31 @@ def test_apply_detection_service_removals_off_by_default(monkeypatch) -> None:
     assert unchanged2.services.to_verify == unchanged.services.to_verify
 
 
+def test_detect_active_services_includes_template_instances(monkeypatch) -> None:
+    """list-units --state=active must surface wg-quick@wg0.service (template instance)."""
+    import subprocess
+
+    from archward.config import detect as detect_mod
+
+    list_units_output = (
+        "wg-quick@wg0.service      loaded active running WireGuard via wg-quick(8) for wg0\n"
+        "sshd.service              loaded active running OpenSSH Daemon\n"
+    )
+
+    def fake_run(cmd, **kwargs):
+        class R:
+            returncode = 0
+            stdout = ""
+        if "list-units" in cmd:
+            R.stdout = list_units_output
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    services = detect_mod.detect_active_enabled_services()
+    assert "wg-quick@wg0.service" in services
+    assert "sshd.service" in services
+
+
 def test_apply_detection_additions_and_removals_compose(monkeypatch) -> None:
     """Additions and removals can land in a single apply_detection call."""
     from archward.config import detect as detect_mod

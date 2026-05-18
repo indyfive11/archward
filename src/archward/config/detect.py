@@ -96,31 +96,28 @@ def detect_aur_helper(preference: tuple[str, ...] = ("yay", "paru", "aurutils"))
 def detect_active_enabled_services() -> tuple[str, ...]:
     """Return services that are enabled AND currently active, minus noise.
 
-    Filters out user-scope, getty@*, systemd-internal*, and unparameterized templates.
-    The returned list is what archward proposes to verify after updates — the user
-    opts in to specific entries via Preferences (or `--detect --yes`).
+    Uses list-units --state=active (captures template instances like
+    wg-quick@wg0.service that list-unit-files misses) then cross-checks
+    is-enabled so only persistent services are proposed to to_verify.
     """
     try:
-        enabled = subprocess.run(
+        result = subprocess.run(
             [
-                "systemctl",
-                "list-unit-files",
-                "--state=enabled",
-                "--type=service",
-                "--no-pager",
-                "--no-legend",
+                "systemctl", "list-units", "--type=service", "--state=active",
+                "--no-pager", "--no-legend", "--plain",
             ],
             check=False,
             capture_output=True,
             text=True,
+            timeout=10,
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return ()
-    if enabled.returncode != 0:
+    if result.returncode != 0:
         return ()
 
     candidates: list[str] = []
-    for line in enabled.stdout.splitlines():
+    for line in result.stdout.splitlines():
         parts = line.split()
         if not parts:
             continue
@@ -131,17 +128,22 @@ def detect_active_enabled_services() -> tuple[str, ...]:
             continue
         candidates.append(unit)
 
-    # Intersect with currently-active state — surface only running services so
-    # the user's opt-in list doesn't include things that are enabled-but-failed.
-    active: list[str] = []
+    # Keep only units that are persistently enabled (survive reboots).
+    active_and_enabled: list[str] = []
     for unit in candidates:
-        r = subprocess.run(
-            ["systemctl", "is-active", "--quiet", unit], check=False, capture_output=True
-        )
+        try:
+            r = subprocess.run(
+                ["systemctl", "is-enabled", "--quiet", unit],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
         if r.returncode == 0:
-            active.append(unit)
+            active_and_enabled.append(unit)
 
-    return tuple(active)
+    return tuple(active_and_enabled)
 
 
 def detect_pacnew_baseline() -> tuple[Path, ...]:
