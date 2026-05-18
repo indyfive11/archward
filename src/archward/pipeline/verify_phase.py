@@ -719,8 +719,6 @@ def _stale_libs_check(cfg: ConfigModel) -> VerifyCheck:
     if not full_coverage:
         try:
             entries = _call_with_timeout(_user_visible_scan, _STALE_LIBS_TIMEOUT_S)
-            if entries is None:
-                entries = []
         except TimeoutError:
             log.warning("_stale_libs_check: user-visible scan timed out")
             return VerifyCheck(

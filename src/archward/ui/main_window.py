@@ -719,4 +719,10 @@ class MainWindow(QMainWindow):
             if self.update_prompter is not None:
                 self.update_prompter.cancel_pending()
             self.worker.wait(3000)
+            if self.worker.isRunning():
+                log.warning("closeEvent: worker still alive after 3 s; disconnecting signals")
+                try:
+                    self.worker.finished_with_result.disconnect()
+                except RuntimeError:
+                    pass
         super().closeEvent(event)

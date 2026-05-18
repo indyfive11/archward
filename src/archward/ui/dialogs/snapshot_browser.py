@@ -698,14 +698,19 @@ class SnapshotBrowser(QDialog):
         self._removed_scan_snap = snap_path
 
         installed_snapshot = dict(self._installed_versions)
+        from archward.system.cache_policy import read_cache_dirs
+        _cache_dir = read_cache_dirs()[0]
         worker = _RollbackWorker(
-            fn=lambda: packages_removed_since_snapshot(snap_path, installed=installed_snapshot),
+            fn=lambda: packages_removed_since_snapshot(
+                snap_path, installed=installed_snapshot, cache_dir=_cache_dir
+            ),
             parent=self,
         )
         self._removed_worker = worker
         worker.finished_with_result.connect(
             lambda result, sp=snap_path: self._on_removed_scan_done(result, sp)
         )
+        worker.finished_with_result.connect(worker.deleteLater)
         worker.start()
 
     def _on_removed_scan_done(self, result: object, snap_path: Path) -> None:

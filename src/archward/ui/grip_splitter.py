@@ -15,12 +15,16 @@ from PySide6.QtWidgets import QSplitter, QSplitterHandle
 
 
 class GripHandle(QSplitterHandle):
+    def __init__(self, orientation, parent) -> None:
+        super().__init__(orientation, parent)
+        from archward.ui.theme import brand_palette
+        self._accent = brand_palette().accent_fg
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
-        from archward.ui.theme import brand_palette
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(brand_palette().accent_fg, 1))
+        painter.setPen(QPen(self._accent, 1))
         cx = self.width() // 2
         cy = self.height() // 2
         if self.orientation() == Qt.Orientation.Vertical:

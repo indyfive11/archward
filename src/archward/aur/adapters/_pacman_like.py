@@ -53,9 +53,10 @@ class _PacmanLikeAdapter:
                 capture_output=True,
                 text=True,
                 env={**__import__("os").environ, "LANG": "C"},
+                timeout=60,
             )
-        except FileNotFoundError:
-            log.warning("%s binary not found at list_pending time", self.name)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            log.warning("%s: list_pending timed out or binary not found", self.name)
             return []
         # `-Qua` returns 0 with no output if nothing's pending, or 0 with lines
         # if there are updates. Some helpers may return 1 for "no updates" —

@@ -247,8 +247,19 @@ class OrphanManagerDialog(QDialog):
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._scan_worker and self._scan_worker.isRunning():
             self._scan_worker.wait(2000)
+            if self._scan_worker.isRunning():
+                try:
+                    self._scan_worker.scan_done.disconnect()
+                except RuntimeError:
+                    pass
         if self._worker and self._worker.isRunning():
             self._worker.wait(5000)
+            if self._worker.isRunning():
+                try:
+                    self._worker.line_ready.disconnect()
+                    self._worker.finished_ok.disconnect()
+                except RuntimeError:
+                    pass
         super().closeEvent(event)
 
     # ── List management ────────────────────────────────────────────────────

@@ -141,6 +141,7 @@ def read_installed_packages_at_snapshot(snapshot_path: Path) -> dict[str, str]:
 def packages_removed_since_snapshot(
     snapshot_path: Path,
     installed: dict[str, str] | None = None,
+    cache_dir: Path = PACMAN_CACHE_DIR,
 ) -> list[RemovedPackage]:
     """Return packages present in the snapshot but no longer installed.
 
@@ -179,7 +180,7 @@ def packages_removed_since_snapshot(
             snapshot_version=snap_pkgs[name],
             was_explicit=(name in explicit),
             was_aur=(name in aur_names),
-            cache_path=find_package_in_cache(name, snap_pkgs[name]),
+            cache_path=find_package_in_cache(name, snap_pkgs[name], cache_dir=cache_dir),
         ))
     return result
 

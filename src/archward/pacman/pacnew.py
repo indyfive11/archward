@@ -44,7 +44,7 @@ def find_pacnew_files(roots: tuple[Path, ...] = (Path("/etc"),), since_epoch: in
         # operation; if the user lacks NOPASSWD, we fall back to a non-sudo find
         # which may produce permission-denied warnings but still picks up most files.
         try:
-            r = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            r = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60)
             if r.returncode != 0:
                 # Fall back to unprivileged find.
                 r = subprocess.run(
@@ -52,9 +52,10 @@ def find_pacnew_files(roots: tuple[Path, ...] = (Path("/etc"),), since_epoch: in
                     check=False,
                     capture_output=True,
                     text=True,
+                    timeout=60,
                 )
-        except FileNotFoundError:
-            log.error("find binary not available")
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            log.error("pacnew scan error for %s: %s", root, e)
             continue
         for line in r.stdout.splitlines():
             line = line.strip()
