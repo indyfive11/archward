@@ -9,6 +9,7 @@ v0.4.0 "What to do?" button has actionable detail.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -73,25 +74,29 @@ def test_old_file_present_passes(tmp_path, cache_dir, monkeypatch) -> None:
     assert "rollback available" in chk.message
 
 
-def test_old_file_missing_with_hook_fails(tmp_path, cache_dir, monkeypatch) -> None:
+def test_old_file_missing_with_hook_warns(tmp_path, cache_dir, monkeypatch) -> None:
+    """Hook detected → intentional cleanup → downgrade to WARN (not FAIL)."""
     _stub_installed(monkeypatch, [("foo", "2-1")])
     monkeypatch.setattr(
         cp, "scan_cleaning_hooks",
         lambda: (Path("/etc/pacman.d/hooks/zz-clean.hook"),),
     )
+    monkeypatch.setattr(cp, "paccache_timer_state", lambda: "disabled")
     chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
-    assert chk.status is CheckStatus.FAIL
+    assert chk.status is CheckStatus.WARN
     assert "rollback unavailable" in chk.message
     assert "zz-clean.hook" in chk.detail
     # Maps to the registered hint key for the "What to do?" button.
     assert chk.name == "rollback-cache"
 
 
-def test_old_file_missing_no_hook_fails_with_prune_cause(
+def test_old_file_missing_no_hook_no_timer_fails_with_prune_cause(
     tmp_path, cache_dir, monkeypatch
 ) -> None:
+    """No hook, no paccache timer → unexpected removal → FAIL with cause."""
     _stub_installed(monkeypatch, [("foo", "2-1")])
     monkeypatch.setattr(cp, "scan_cleaning_hooks", lambda: ())
+    monkeypatch.setattr(cp, "paccache_timer_state", lambda: "disabled")
     chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
     assert chk.status is CheckStatus.FAIL
     assert "paccache" in chk.detail
@@ -145,3 +150,37 @@ def test_scan_failure_skips_not_fails(tmp_path, monkeypatch) -> None:
     chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
     assert chk.status is CheckStatus.PASS
     assert "skipped" in chk.message
+
+
+# ── WARN when intentional cleanup policy is detected ─────────────────────
+
+
+def test_rollback_cache_warn_when_hook_active(tmp_path, cache_dir, monkeypatch) -> None:
+    """When a paccache hook ran, the missing pre-update files are expected
+    — downgrade to WARN so a clean system doesn't report VERIFY_FAILED."""
+    _stub_installed(monkeypatch, [("foo", "2-1")])
+    hook = MagicMock()
+    hook.name = "paccache.hook"
+    monkeypatch.setattr(cp, "scan_cleaning_hooks", lambda: (hook,))
+    monkeypatch.setattr(cp, "paccache_timer_state", lambda: "disabled")
+    chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
+    assert chk.status is CheckStatus.WARN
+    assert "rollback unavailable" in chk.message
+
+
+def test_rollback_cache_warn_when_timer_enabled(tmp_path, cache_dir, monkeypatch) -> None:
+    """paccache.timer enabled (scheduled cache cleaning) also downgrades to WARN."""
+    _stub_installed(monkeypatch, [("foo", "2-1")])
+    monkeypatch.setattr(cp, "scan_cleaning_hooks", lambda: ())
+    monkeypatch.setattr(cp, "paccache_timer_state", lambda: "enabled")
+    chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
+    assert chk.status is CheckStatus.WARN
+
+
+def test_rollback_cache_fail_without_policy(tmp_path, cache_dir, monkeypatch) -> None:
+    """No hook, no timer → manual or unexpected removal → keeps FAIL."""
+    _stub_installed(monkeypatch, [("foo", "2-1")])
+    monkeypatch.setattr(cp, "scan_cleaning_hooks", lambda: ())
+    monkeypatch.setattr(cp, "paccache_timer_state", lambda: "disabled")
+    chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
+    assert chk.status is CheckStatus.FAIL
