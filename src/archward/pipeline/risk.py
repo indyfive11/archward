@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import re
 
 from archward.events import EventBus
 from archward.models.config import ConfigModel
@@ -20,6 +21,11 @@ from archward.pacman import query as pq
 log = logging.getLogger(__name__)
 
 PHASE = "risk"
+
+
+def _major_version(v: str) -> int | None:
+    m = re.match(r"(\d+)", v)
+    return int(m.group(1)) if m else None
 
 
 def _matches_any(pkg: str, patterns: tuple[str, ...]) -> str | None:
@@ -32,6 +38,11 @@ def _matches_any(pkg: str, patterns: tuple[str, ...]) -> str | None:
 def classify_one(pkg: str, old_version: str, new_version: str, cfg: ConfigModel) -> PendingUpdate:
     # 1. Exact-match HIGH list.
     if pkg in cfg.risk.high:
+        reason = "in risk.high"
+        old_maj = _major_version(old_version)
+        new_maj = _major_version(new_version)
+        if old_maj is not None and new_maj is not None and new_maj != old_maj:
+            reason += " ⚠ MAJOR VERSION"
         return PendingUpdate(
             name=pkg,
             old_version=old_version,
@@ -39,7 +50,7 @@ def classify_one(pkg: str, old_version: str, new_version: str, cfg: ConfigModel)
             source="official",
             risk=RiskLevel.HIGH,
             is_kernel=False,
-            reason="in risk.high",
+            reason=reason,
         )
 
     # 2. Kernel patterns (with exclude check).

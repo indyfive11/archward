@@ -68,3 +68,28 @@ def test_excluded_pattern_falls_through(cfg):
     result = classify_one("linux-firmware", "20260501", "20260514", cfg)
     assert result.risk is RiskLevel.LOW
     assert result.is_kernel is False
+
+
+# ── Major version bump feature ────────────────────────────────────────────
+
+
+def test_major_version_bump_appends_warning(cfg):
+    """HIGH-risk package with differing leading integer → reason gets ⚠ MAJOR VERSION."""
+    result = classify_one("openssl", "1.1.1-1", "3.5.0-1", cfg)
+    assert result.risk is RiskLevel.HIGH
+    assert "⚠ MAJOR VERSION" in result.reason
+    assert "in risk.high" in result.reason
+
+
+def test_minor_bump_no_major_version_warning(cfg):
+    """Bump within same major — no warning appended."""
+    result = classify_one("openssl", "3.4.0-1", "3.5.0-1", cfg)
+    assert result.risk is RiskLevel.HIGH
+    assert "⚠ MAJOR VERSION" not in result.reason
+
+
+def test_kernel_pattern_no_major_version_flag(cfg):
+    """Kernel packages go through the kernel-pattern branch — not the risk.high branch."""
+    result = classify_one("linux", "6.12.1.arch1-1", "7.0.0.arch1-1", cfg)
+    assert result.is_kernel is True
+    assert "⚠ MAJOR VERSION" not in result.reason
