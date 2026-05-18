@@ -6,6 +6,104 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.9] — 2026-05-17
+
+**Orphan manager, snapshot reinstall, grip handles, reliability fixes.**
+A new Orphan Package Manager dialog (Tools menu) lists orphaned dependencies with
+checkbox removal, cascaded-dep preview, and an automatic safety snapshot before
+any deletion. The Snapshot Browser gains a "Removed since snapshot" section that
+detects and reinstalls packages removed since the snapshot was taken, with buttons
+for cache / repos / AUR paths. Grip-dot handles appear on every splitter. Several
+reliability fixes: subprocess timeouts, thread signal cleanup on close, worker
+object leak, custom `CacheDir` support.
+
+### Added
+
+- **Orphan Package Manager (F1).** New `OrphanManagerDialog` accessible via
+  Tools → Manage Orphans… and from the post-update result banner. Lists packages
+  returned by `pacman -Qdtq` with per-package checkboxes, Select All / Deselect
+  All buttons, and a Remove Selected… action. Before executing, runs a dry-run
+  (`pacman -Rsp`) and shows a confirmation dialog separating explicitly-selected
+  packages from cascaded dependencies so the user sees exactly what will be
+  removed. A safety snapshot is taken on the worker thread before the actual
+  removal. Output is streamed to an in-dialog log pane.
+
+- **"Removed since snapshot" in Snapshot Browser (F2).** When a snapshot is
+  selected, the browser scans `all.txt` against the currently installed package
+  set and shows a tree of packages that have been completely removed since the
+  snapshot. Per-row action buttons: "Reinstall (cached)" when the exact snapshot
+  version is in the pacman cache, "Reinstall from repos" for official packages,
+  "Reinstall from AUR" when an AUR helper is available, or "Not available". The
+  scan runs asynchronously so the rest of the detail panel is instantly responsive.
+  Stale results from rapid snapshot switching are silently discarded.
+
+- **`archward rollback reinstall` CLI subcommand (F3).** Lists all packages removed
+  since a given snapshot (`archward rollback reinstall <snapshot-id>`); with
+  `--yes` reinstalls each using the cache → repos → AUR priority chain.
+
+- **`RemovedPackage` dataclass and supporting functions in `rollback.py` (F2).**
+  `packages_removed_since_snapshot()`, `reinstall_from_repos()`,
+  `reinstall_from_aur()`. `RollbackOp.kind` extended with
+  `"reinstall_from_repos"` and `"reinstall_from_aur"`.
+
+- **Grip-dot handles on all splitters (F4).** Extracted shared `GripSplitter` /
+  `GripHandle` widget (`archward.ui.grip_splitter`). Applied to the main
+  window horizontal splitter, the right-pane vertical splitter, and the new
+  three-pane vertical splitter inside the Snapshot Browser detail panel (Configs /
+  Critical packages / Removed packages). Handles draw three orientation-aware dots
+  and highlight on hover.
+
+- **Snapshot Browser detail splitter (F4).** The right-hand detail panel is now a
+  `GripSplitter(Vertical)` with three resizable sections. Splitter sizes persist
+  across sessions via QSettings (`ui/snapshot_horiz_split`,
+  `ui/snapshot_detail_split`).
+
+- **Interactive column resizing in Snapshot Browser (F4).** Package and config
+  tree columns are resizable; widths persist via QSettings.
+
+### Fixed
+
+- **vercmp crash on removed packages.** `_render_critical_packages()` called
+  `pq.vercmp()` with the `"(not installed)"` sentinel, raising a crash. Guarded
+  with an early check; such packages now show "Reinstall" instead of a version diff.
+
+- **Snapshot browser lag.** Two compounding causes: (1) `pacman -Q` was called
+  twice per snapshot click; (2) the removed-packages scan ran synchronously on the
+  main thread. Fixed by computing the installed-package dict once per click and
+  running the removed-packages scan on a background thread.
+
+- **Orphan manager blocking Wayland sudo.** Original implementation called
+  `take_snapshot()` on the Qt main thread, blocking the Wayland connection so
+  ksshaskpass could not receive keyboard focus. Moved the entire snapshot +
+  removal sequence to a `_RemovalWorker` background thread.
+
+- **Subprocess timeouts.** `pacnew.find_pacnew_files()` and
+  `_PacmanLikeAdapter.list_pending()` now pass `timeout=60` to `subprocess.run`
+  and catch `TimeoutExpired`, preventing a hung NFS mount or slow AUR query from
+  freezing the pipeline indefinitely.
+
+- **Thread signal cleanup on close.** `MainWindow.closeEvent` and
+  `OrphanManagerDialog.closeEvent` now disconnect worker signals after `wait()`
+  times out, preventing callbacks into destroyed Qt objects.
+
+- **Worker object leak in Snapshot Browser.** Rapid snapshot switching created
+  `_RollbackWorker` instances for the removed-packages scan that were never freed.
+  Fixed by connecting `deleteLater` to `finished_with_result`.
+
+- **Custom `CacheDir` not respected for reinstall detection.**
+  `packages_removed_since_snapshot()` now accepts a `cache_dir` parameter and
+  the Snapshot Browser passes the value from `pacman.conf` (via
+  `read_cache_dirs()`), so users with a non-default cache location see correct
+  "Reinstall (cached)" availability.
+
+- **Dead code in `verify_phase._stale_libs_check`.** Removed unreachable
+  `if entries is None` branch — `_user_visible_scan` always returns `list[dict]`.
+
+### Performance
+
+- `GripHandle.paintEvent` no longer calls `brand_palette()` on every repaint;
+  the accent colour is cached in `__init__`.
+
 ## [0.4.8] — 2026-05-16
 
 **Welcome wizard, Preferences sidebar, Help menu, keyboard shortcuts, GUI polish.**
