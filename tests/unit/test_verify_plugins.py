@@ -215,10 +215,8 @@ class TestStaleServiceWARN:
     def test_stale_unit_returns_warn_with_marker(self, monkeypatch, tmp_path):
         # Plugins off; only the service check is being exercised.
         monkeypatch.setattr(verify_phase, "_discover_plugin_checkers", lambda: [])
-        # Unit doesn't exist → unit_exists False.
-        monkeypatch.setattr(verify_phase.services, "unit_exists", lambda u: False)
-        # is_active should never be reached, but stub it to make the test deterministic.
-        monkeypatch.setattr(verify_phase.services, "is_active", lambda u: False)
+        # rc=4: systemctl is-active exit code for "no such unit".
+        monkeypatch.setattr(verify_phase.services, "active_status", lambda u: 4)
 
         cfg = _cfg_with_services("ghost.service")
         result = verify_phase.run_verify(cfg, _make_snapshot(tmp_path), EventBus())
@@ -229,11 +227,11 @@ class TestStaleServiceWARN:
         assert "archward --detect" in svc[0].message
 
     def test_existing_inactive_unit_still_uses_severity(self, monkeypatch, tmp_path):
-        """A unit that exists but is inactive should keep today's FAIL/WARN
-        severity behavior — (A) only changes the gone-unit case."""
+        """A unit that exists but is inactive should keep FAIL/WARN severity
+        behavior — only rc=4 triggers the 'no such unit' path."""
         monkeypatch.setattr(verify_phase, "_discover_plugin_checkers", lambda: [])
-        monkeypatch.setattr(verify_phase.services, "unit_exists", lambda u: True)
-        monkeypatch.setattr(verify_phase.services, "is_active", lambda u: False)
+        # rc=3: exists but inactive/failed.
+        monkeypatch.setattr(verify_phase.services, "active_status", lambda u: 3)
 
         cfg = _cfg_with_services("down.service")
         result = verify_phase.run_verify(cfg, _make_snapshot(tmp_path), EventBus())
@@ -252,8 +250,8 @@ class TestInlineAutoPrune:
 
     def test_auto_prune_disabled_no_mutation(self, monkeypatch, tmp_path):
         monkeypatch.setattr(verify_phase, "_discover_plugin_checkers", lambda: [])
-        monkeypatch.setattr(verify_phase.services, "unit_exists", lambda u: u != "ghost.service")
-        monkeypatch.setattr(verify_phase.services, "is_active", lambda u: True)
+        monkeypatch.setattr(verify_phase.services, "active_status",
+                            lambda u: 4 if u == "ghost.service" else 0)
 
         cfg = _cfg_with_services("good.service", "ghost.service", auto_prune=False)
         config_path = tmp_path / "config.toml"
@@ -272,8 +270,8 @@ class TestInlineAutoPrune:
         """auto_prune=True but config_path=None (e.g. test harness): no write,
         no summary check; stale entries surface as WARN."""
         monkeypatch.setattr(verify_phase, "_discover_plugin_checkers", lambda: [])
-        monkeypatch.setattr(verify_phase.services, "unit_exists", lambda u: u != "ghost.service")
-        monkeypatch.setattr(verify_phase.services, "is_active", lambda u: True)
+        monkeypatch.setattr(verify_phase.services, "active_status",
+                            lambda u: 4 if u == "ghost.service" else 0)
 
         cfg = _cfg_with_services("good.service", "ghost.service", auto_prune=True)
         result = verify_phase.run_verify(cfg, _make_snapshot(tmp_path), EventBus(), config_path=None)
@@ -290,8 +288,10 @@ class TestInlineAutoPrune:
         for the pruned name does not appear (since pruning happens before
         the service-check loop)."""
         monkeypatch.setattr(verify_phase, "_discover_plugin_checkers", lambda: [])
+        # unit_exists needed for detect_stale_services (auto-prune path).
         monkeypatch.setattr(verify_phase.services, "unit_exists", lambda u: u != "ghost.service")
-        monkeypatch.setattr(verify_phase.services, "is_active", lambda u: True)
+        # active_status needed for _service_check (good.service only, post-prune).
+        monkeypatch.setattr(verify_phase.services, "active_status", lambda u: 0)
 
         cfg = _cfg_with_services("good.service", "ghost.service", auto_prune=True)
         config_path = tmp_path / "config.toml"

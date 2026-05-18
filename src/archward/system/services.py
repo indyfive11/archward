@@ -18,6 +18,28 @@ log = logging.getLogger(__name__)
 _SYSTEMCTL_TIMEOUT_S = 5
 
 
+def active_status(unit: str) -> int:
+    """Run `systemctl is-active <unit>`; return the raw exit code.
+
+    0 = active, 3 = inactive/failed, 4 = no such unit.
+    Returns -1 on timeout or if systemctl is unavailable — callers should
+    treat -1 as "unknown" and not report "no such unit" on it.
+    """
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit],
+            check=False,
+            capture_output=True,
+            timeout=_SYSTEMCTL_TIMEOUT_S,
+        )
+        return result.returncode
+    except FileNotFoundError:
+        return -1
+    except subprocess.TimeoutExpired:
+        log.warning("systemctl is-active %s timed out after %ss", unit, _SYSTEMCTL_TIMEOUT_S)
+        return -1
+
+
 def is_active(unit: str) -> bool:
     """Return True if `systemctl is-active <unit>` reports active.
 

@@ -72,3 +72,36 @@ def test_unit_exists_uses_timeout_kwarg(monkeypatch) -> None:
     services.unit_exists("foo.service")
     assert "timeout" in captured
     assert captured["timeout"] > 0
+
+
+def test_active_status_returns_exit_code(monkeypatch) -> None:
+    """active_status passes through the raw systemctl exit code."""
+    for expected_rc in (0, 3, 4):
+        def fake(*args, rc=expected_rc, **kwargs):
+            class R:
+                returncode = rc
+            return R()
+        monkeypatch.setattr(subprocess, "run", fake)
+        assert services.active_status("sshd.service") == expected_rc
+
+
+def test_active_status_timeout_returns_neg1(monkeypatch) -> None:
+    """Hung systemctl is-active → -1 (unknown, not 'no such unit')."""
+    monkeypatch.setattr(subprocess, "run", _raise_timeout)
+    assert services.active_status("sshd.service") == -1
+
+
+def test_active_status_uses_timeout_kwarg(monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake(*args, **kwargs):
+        captured.update(kwargs)
+
+        class R:
+            returncode = 0
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    services.active_status("foo.service")
+    assert "timeout" in captured
+    assert captured["timeout"] > 0

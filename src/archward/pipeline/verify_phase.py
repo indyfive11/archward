@@ -88,16 +88,29 @@ def _call_with_timeout(fn, timeout_s: float):
     return result_box[0] if result_box else None
 
 
+def _extract_kernel_flavor(release: str) -> str:
+    """Extract the kernel flavor suffix from a uname -r string.
+
+    The format is <version>-<pkgrel>-<flavor> where pkgrel is the first
+    all-digit dash-separated segment:
+      "6.18.26-2-lts"        → "lts"
+      "7.0.9-arch1-1"        → ""   (mainline, no flavor)
+      "7.0.9-1-cachyos-bore" → "cachyos-bore"
+    """
+    parts = release.split("-")
+    for i, part in enumerate(parts):
+        if part.isdigit():
+            return "-".join(parts[i + 1:])
+    return ""
+
+
 def _kernel_check() -> VerifyCheck:
     running = kernel.running_kernel()
-    # Heuristic: pull the first installed `linux*` package (excluding -firmware/-docs)
-    # and compare its version against the running kernel string. If multiple kernels are
-    # installed (linux + linux-lts), we check the one whose name appears in the running
-    # kernel release.
-    candidates = []
-    for name, version in pq.list_all():
-        if name.startswith("linux") and not name.endswith(("-firmware", "-docs", "-headers")):
-            candidates.append((name, version))
+    candidates = [
+        (name, ver)
+        for name, ver in pq.list_all()
+        if name.startswith("linux") and not name.endswith(("-firmware", "-docs", "-headers"))
+    ]
 
     if not candidates:
         return VerifyCheck(
@@ -107,18 +120,20 @@ def _kernel_check() -> VerifyCheck:
             message="No linux* package detected — kernel match skipped",
         )
 
-    # Try to find the kernel matching the running release; else compare first.
-    best = candidates[0]
-    for name, version in candidates:
-        if name in running or running.startswith(re.sub(r"-.*$", "", version)):
-            best = (name, version)
-            break
+    # Match by flavor suffix: "6.18.26-2-lts" → "lts" → linux-lts package.
+    # Falls back to the first candidate on single-kernel systems or unknown flavors.
+    flavor = _extract_kernel_flavor(running)
+    expected_pkg = f"linux-{flavor}" if flavor else "linux"
+    best = next((c for c in candidates if c[0] == expected_pkg), candidates[0])
     name, version = best
-    # The package version may include a pkgrel like "7.0.6.arch1-1"; the running
-    # kernel release like "7.0.6-arch1-1-cachyos-bore". Look for substring of the
-    # leading version triplet.
-    base = version.split("-")[0]
-    if base in running:
+
+    # Extract the leading numeric triplet from the package version.
+    # "7.0.9.arch1-1" → "7.0.9" (stops before the .archN non-numeric segment).
+    # "6.18.32-1-lts"  → "6.18.32".
+    # Check that the running kernel release starts with that triplet.
+    _vtm = re.match(r"(\d+(?:\.\d+)*)", version)
+    base = _vtm.group(1) if _vtm else version.split("-")[0]
+    if running.startswith(base):
         return VerifyCheck(
             bucket="universal",
             name="kernel",
@@ -287,6 +302,7 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
         )
 
     hooks = cp.scan_cleaning_hooks()
+    intentional_cleanup = bool(hooks) or cp.paccache_timer_state() == "enabled"
     cause = (
         f"A cache-cleaning pacman hook ({', '.join(h.name for h in hooks)}) "
         "ran during this update — that is what removed them. Remove the "
@@ -299,7 +315,7 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
     return VerifyCheck(
         bucket="universal",
         name="rollback-cache",
-        status=CheckStatus.FAIL,
+        status=CheckStatus.WARN if intentional_cleanup else CheckStatus.FAIL,
         message=(
             f"rollback unavailable for {len(missing)} of {len(updated)} "
             "just-updated package(s) — pre-update version gone from cache"
@@ -818,23 +834,22 @@ _STALE_MARKER = "no such unit"  # message prefix used by run_verify's auto-prune
 
 
 def _service_check(unit: str, severity_map: dict[str, str]) -> VerifyCheck:
-    # Distinguish "unit is gone" from "unit exists but is stopped". The
-    # former is a config-drift problem (file removed by package uninstall
-    # or hand-deletion); the latter is the runtime problem severity is
-    # designed for. Mixing them under "not active" makes stale entries
-    # invisible until the user runs --detect manually.
-    if not services.unit_exists(unit):
+    # Single call: systemctl is-active exit codes are the authoritative source.
+    # rc=0: active; rc=4: no such unit; rc=1-3: exists but not active.
+    # rc=-1 (timeout/unavailable): treat as "exists but unknown state" — fall
+    # through to severity so the user sees a FAIL/WARN rather than a misleading
+    # "no such unit" on a slow systemd bus.
+    rc = services.active_status(unit)
+    if rc == 4:
         return VerifyCheck(
             bucket="services",
             name=unit,
             status=CheckStatus.WARN,
             message=f"{_STALE_MARKER} (file removed/uninstalled) — run `archward --detect` to clean up",
         )
-
-    active = services.is_active(unit)
-    sev = severity_map.get(unit, "critical")
-    if active:
+    if rc == 0:
         return VerifyCheck(bucket="services", name=unit, status=CheckStatus.PASS, message="active")
+    sev = severity_map.get(unit, "critical")
     if sev == "watch":
         return VerifyCheck(
             bucket="services",
