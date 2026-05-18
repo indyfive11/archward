@@ -6,6 +6,50 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.10] — 2026-05-18
+
+**VPS deployment bug fixes.**
+Five issues reported from a headless EndeavourOS VPS deployment of v0.4.9.
+
+### Fixed
+
+- **Service verify false "no such unit" on active services.** `_service_check()`
+  now uses a single `services.active_status()` call (systemctl is-active exit
+  codes) instead of the two-call `unit_exists` + `is_active` pattern. Exit code
+  4 is the authoritative "no such unit" signal; this correctly handles vendor
+  units in `/usr/lib/systemd/system/` and custom units with restrictive
+  permissions (640 root:root) that the old D-Bus approach misclassified under
+  bus saturation or slow systemd states.
+
+- **Kernel mismatch check picks wrong package on multi-kernel systems.** Added
+  `_extract_kernel_flavor()` to parse the flavor suffix from `uname -r`
+  (e.g. `6.18.26-2-lts` → `lts` → `linux-lts`). The previous name/version
+  heuristic failed when the running kernel was a pre-update version that didn't
+  match any installed package string. Also fixes arch-patched kernel version
+  comparison (`7.0.9.arch1-1` dot vs `7.0.9-arch1-1` dash).
+
+- **`--detect` misses template instance units.** `detect_active_enabled_services()`
+  now uses `systemctl list-units --state=active` (which includes runtime instances
+  like `wg-quick@wg0.service`) as its base query, then cross-checks
+  `systemctl is-enabled` per unit to keep only persistent services. The previous
+  `list-unit-files --state=enabled` query did not reliably surface template
+  instances. Added timeouts (10s list, 5s per-unit) matching existing conventions.
+
+- **`rollback-cache` FAIL is noisy after intentional cache cleanup.** When
+  `scan_cleaning_hooks()` detects a paccache hook ran during the transaction, or
+  `paccache.timer` is enabled, the missing pre-update files are the expected result
+  of an intentional cache policy. Severity is now WARN instead of FAIL in those
+  cases; a manual `pacman -Sc` with no policy evidence retains FAIL.
+
+### Added
+
+- **Major version bump warning for HIGH-risk packages.** When a package in
+  `risk.high` has a differing leading integer between old and new version
+  (e.g. `nodejs 25.9.0-1 → 26.1.0-2`), the risk view reason column gains
+  `⚠ MAJOR VERSION`. Kernel packages are excluded (they use the kernel-pattern
+  branch). Addresses the case where ABI-breaking major bumps need to be
+  distinguished from minor/patch updates within the same HIGH risk tier.
+
 ## [0.4.9] — 2026-05-17
 
 **Orphan manager, snapshot reinstall, grip handles, reliability fixes.**
