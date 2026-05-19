@@ -28,6 +28,7 @@ from archward.config import paths
 from archward.config.defaults import default_config
 from archward.models.config import (
     AurConfig,
+    CacheConfig,
     ConfigModel,
     GatesConfig,
     GeneralConfig,
@@ -56,6 +57,7 @@ _SECTIONS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("verify", VerifyConfig),
     ("privilege", PrivilegeConfig),
     ("hooks", HooksConfig),
+    ("cache", CacheConfig),
 )
 
 _CURRENT_SCHEMA_VERSION = 1

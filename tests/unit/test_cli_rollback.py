@@ -103,7 +103,8 @@ def test_config_happy_path(tmp_path, monkeypatch, capsys) -> None:
 # ── rollback package ─────────────────────────────────────────────────
 
 
-def test_package_unknown_returns_2(tmp_path, monkeypatch, capsys) -> None:
+def test_package_absent_from_snapshot_returns_2(tmp_path, monkeypatch, capsys) -> None:
+    """Package not in all.txt at all → 'was not installed at snapshot time'."""
     snap_dir = tmp_path / "snapshots"
     _seed_snapshot(snap_dir)
     _patch_cfg(monkeypatch, snap_dir)
@@ -115,7 +116,30 @@ def test_package_unknown_returns_2(tmp_path, monkeypatch, capsys) -> None:
     )
     code = cmd.cmd_package(args, None)
     assert code == 2
-    assert "was not captured" in capsys.readouterr().err
+    assert "was not installed" in capsys.readouterr().err
+
+
+def test_package_not_critical_but_in_all_txt(tmp_path, monkeypatch, capsys) -> None:
+    """Package in all.txt but not critical.txt → explains scope + pacman -U hint."""
+    snap_dir = tmp_path / "snapshots"
+    p = _seed_snapshot(snap_dir)
+    # Write vim only into all.txt, not into critical.txt.
+    (p / "packages" / "all.txt").write_text(
+        "glibc 2.42-2\nvim 9.1.123-1\n"
+    )
+    _patch_cfg(monkeypatch, snap_dir)
+
+    args = Namespace(
+        snapshot_id="2026-05-15_134116",
+        package="vim",
+        confirm_boot_critical=False,
+    )
+    code = cmd.cmd_package(args, None)
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "not a critical package" in err
+    assert "pacman -U" in err
+    assert "9.1.123-1" in err
 
 
 def test_package_boot_critical_refused_without_flag(tmp_path, monkeypatch, capsys) -> None:

@@ -130,7 +130,8 @@ archward [flags]
   --detect          Run distro / kernel / AUR-helper / service detection and
                     propose a diff against ~/.config/archward/config.toml
                     (or the --profile file if given).
-  --write-config    Overwrite the config file with archward defaults and exit.
+  --write-config    Write defaults to the config file and exit. Backs up the
+                    existing config to config.toml.bak first.
   --version         Print version and exit.
 ```
 
@@ -175,6 +176,35 @@ archward pacnew apply <path> --strategy=keep_ours|take_new|edit|leave
     Manual .pacnew resolution. `path` accepts either the live /etc
     path or the .pacnew sibling. `apply --strategy=edit` spawns
     $VISUAL / $EDITOR on both files.
+
+archward cache status
+archward cache gaps
+archward cache set-keep N [--force]
+archward cache clean
+    Inspect and manage the pacman package cache. `status` shows the
+    rollback-safety verdict (DANGEROUS/TIGHT/BALANCED/GENEROUS/UNMANAGED),
+    cache size, timer state, and detected cleaning hooks. `gaps` lists
+    installed packages with no cached prior version. `set-keep N` writes
+    /etc/conf.d/pacman-contrib and enables paccache.timer (systemd only).
+    `clean` runs paccache with a pre-clean rollback-coverage summary.
+
+archward gates [--snapshot ID]
+    Run pre-flight and gate checks standalone (db.lck, cache-safety,
+    Arch News, disk space, snapshot age) without starting an update.
+    Exits 0 all-pass / 1 any-fail / 2 warnings-only.
+
+archward risk [--no-aur]
+    Risk-classify pending updates (HIGH/MEDIUM/LOW) using the same rules
+    as the update pipeline. Shows pending AUR updates too if a helper is
+    available. --no-aur skips the AUR query. Always exits 0.
+
+archward aur pending
+    List pending AUR updates via the configured helper (yay, paru, etc.)
+    without snapshot overhead.
+
+archward aur quarantine list
+archward aur quarantine clear [PKG] [--yes]
+    Inspect or clear the AUR build quarantine list.
 ```
 
 ### Exit codes
@@ -236,6 +266,11 @@ pre_update = []          # shell commands run before pacman -Syu
 post_verify = []         # shell commands run after the verify phase
 timeout_seconds = 60
 fail_pipeline_on_error = false   # true → non-zero pre_update hook aborts the pipeline
+
+[cache]
+managed = false          # true = archward owns retention via paccache.timer
+keep_versions = 3        # paccache -rk<N> when set-keep is used
+warn_if_unmanaged = true # preflight WARN when no cache policy is active
 
 # Plus [aur], [pacman], [verify], [privilege] sections —
 # run `archward --write-config` to emit the full schema with all defaults.

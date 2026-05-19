@@ -104,6 +104,25 @@ def preflight_checks(cfg: ConfigModel, bus: EventBus) -> list[GateResult]:
                     can_override=cfg.gates.allow_override,
                 )
             )
+        elif (
+            policy.safety is cp.RollbackSafety.UNMANAGED
+            and cfg.cache.warn_if_unmanaged
+        ):
+            msg = (
+                "paccache retention is unmanaged — rollback coverage will degrade "
+                "over time. Run `archward cache status` to assess, or set "
+                "[cache] managed = true in config.toml."
+            )
+            bus.emit_log(PHASE_PREFLIGHT, f"WARN cache-safety: {msg}")
+            results.append(
+                GateResult(
+                    name="cache-safety",
+                    status=GateStatus.WARN,
+                    message=msg,
+                    detail=policy.explanation,
+                    can_override=cfg.gates.allow_override,
+                )
+            )
         else:
             bus.emit_log(
                 PHASE_PREFLIGHT,

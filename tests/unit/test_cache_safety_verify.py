@@ -184,3 +184,15 @@ def test_rollback_cache_fail_without_policy(tmp_path, cache_dir, monkeypatch) ->
     monkeypatch.setattr(cp, "paccache_timer_state", lambda: "disabled")
     chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
     assert chk.status is CheckStatus.FAIL
+
+
+def test_rollback_cache_fail_detail_mentions_cache_subcommand(
+    tmp_path, cache_dir, monkeypatch
+) -> None:
+    """FAIL detail must point to `archward cache status` so users have a next step."""
+    _stub_installed(monkeypatch, [("foo", "2-1")])
+    monkeypatch.setattr(cp, "scan_cleaning_hooks", lambda: ())
+    monkeypatch.setattr(cp, "paccache_timer_state", lambda: "disabled")
+    chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
+    assert chk.status is CheckStatus.FAIL
+    assert "archward cache status" in chk.detail

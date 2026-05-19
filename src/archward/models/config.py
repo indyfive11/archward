@@ -109,6 +109,14 @@ class PrivilegeConfig(BaseModel):
     askpass: str = ""  # override path; default auto-discovers
 
 
+class CacheConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    managed: bool = False
+    keep_versions: int = 3
+    warn_if_unmanaged: bool = True
+
+
 class HooksConfig(BaseModel):
     """User-configurable shell commands run at pipeline checkpoints.
 
@@ -143,3 +151,4 @@ class ConfigModel(BaseModel):
     verify: VerifyConfig
     privilege: PrivilegeConfig
     hooks: HooksConfig = HooksConfig()
+    cache: CacheConfig = CacheConfig()

@@ -302,3 +302,31 @@ def test_preset_conf_content_has_args() -> None:
     content = cp.preset_conf_content(server)
     assert "PACCACHE_ARGS='-rk10'" in content
     assert content.startswith("# Managed by archward")
+
+
+# ── rollback_gaps ─────────────────────────────────────────────────────────────
+
+
+def test_rollback_gaps_empty_when_all_covered() -> None:
+    installed = [("foo", "2-1"), ("bar", "3-1")]
+    cache_names = {
+        "foo-1-1-x86_64.pkg.tar.zst",   # older than current 2-1
+        "foo-2-1-x86_64.pkg.tar.zst",   # current
+        "bar-2-1-x86_64.pkg.tar.zst",   # older than current 3-1
+    }
+    assert cp.rollback_gaps(installed, cache_names) == []
+
+
+def test_rollback_gaps_flags_missing_entirely() -> None:
+    installed = [("foo", "2-1"), ("bar", "3-1")]
+    cache_names = {"foo-1-1-x86_64.pkg.tar.zst"}  # bar has nothing
+    gaps = cp.rollback_gaps(installed, cache_names)
+    assert ("bar", "3-1") in gaps
+    assert ("foo", "2-1") not in gaps
+
+
+def test_rollback_gaps_flags_only_current_version() -> None:
+    installed = [("foo", "2-1")]
+    cache_names = {"foo-2-1-x86_64.pkg.tar.zst"}   # only the current version
+    gaps = cp.rollback_gaps(installed, cache_names)
+    assert ("foo", "2-1") in gaps

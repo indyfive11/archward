@@ -131,7 +131,7 @@ def test_prune_nothing_to_do(tmp_path, monkeypatch, capsys) -> None:
     _seed_snapshot(snap_dir, "2026-05-15_120000")
     _patch(monkeypatch, snap_dir)
 
-    args = Namespace(keep=10, yes=False)
+    args = Namespace(keep=10, yes=False, clean_orphans=False)
     code = cmd.cmd_prune(args, None)
     assert code == 0
     assert "nothing to prune" in capsys.readouterr().out
@@ -143,7 +143,7 @@ def test_prune_with_yes_skips_confirm(tmp_path, monkeypatch, capsys) -> None:
         _seed_snapshot(snap_dir, f"2026-05-1{i}_120000", ts_offset_sec=86400 * i)
     _patch(monkeypatch, snap_dir)
 
-    args = Namespace(keep=2, yes=True)
+    args = Namespace(keep=2, yes=True, clean_orphans=False)
     code = cmd.cmd_prune(args, None)
     assert code == 0
 
@@ -159,7 +159,7 @@ def test_prune_declined_at_prompt(tmp_path, monkeypatch, capsys) -> None:
     _patch(monkeypatch, snap_dir)
     monkeypatch.setattr("builtins.input", lambda *a, **k: "n")
 
-    args = Namespace(keep=2, yes=False)
+    args = Namespace(keep=2, yes=False, clean_orphans=False)
     code = cmd.cmd_prune(args, None)
     assert code == 0
     assert "aborted" in capsys.readouterr().out
@@ -181,7 +181,54 @@ def test_prune_uses_cfg_default_keep(tmp_path, monkeypatch, capsys) -> None:
     cfg.risk.kernel_pattern_exclude = ()
     monkeypatch.setattr(cmd, "build_config", lambda *a, **k: cfg)
 
-    args = Namespace(keep=None, yes=True)
+    args = Namespace(keep=None, yes=True, clean_orphans=False)
     cmd.cmd_prune(args, None)
     remaining = [p for p in snap_dir.iterdir() if p.is_dir()]
     assert len(remaining) == 3
+
+
+# ── prune orphan detection ─────────────────────────────────────────────
+
+
+def test_prune_reports_orphaned_dirs(tmp_path, monkeypatch, capsys) -> None:
+    """Dirs without .timestamp are reported but not deleted by default."""
+    snap_dir = tmp_path / "snapshots"
+    _seed_snapshot(snap_dir, "2026-05-15_120000")
+    orphan = snap_dir / "2026-05-14_abort"
+    orphan.mkdir(parents=True)
+    _patch(monkeypatch, snap_dir)
+
+    args = Namespace(keep=10, yes=False, clean_orphans=False)
+    code = cmd.cmd_prune(args, None)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "orphaned" in out
+    assert orphan.exists()  # not deleted without --clean-orphans
+
+
+def test_prune_clean_orphans_removes_them(tmp_path, monkeypatch, capsys) -> None:
+    """--clean-orphans removes dirs without .timestamp."""
+    snap_dir = tmp_path / "snapshots"
+    _seed_snapshot(snap_dir, "2026-05-15_120000")
+    orphan = snap_dir / "2026-05-14_abort"
+    orphan.mkdir(parents=True)
+    _patch(monkeypatch, snap_dir)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "y")
+
+    args = Namespace(keep=10, yes=False, clean_orphans=True)
+    code = cmd.cmd_prune(args, None)
+    assert code == 0
+    assert not orphan.exists()
+    assert "removed orphan" in capsys.readouterr().out
+
+
+def test_prune_no_orphans_no_mention(tmp_path, monkeypatch, capsys) -> None:
+    """No orphaned dirs → no orphan output at all."""
+    snap_dir = tmp_path / "snapshots"
+    _seed_snapshot(snap_dir, "2026-05-15_120000")
+    _patch(monkeypatch, snap_dir)
+
+    args = Namespace(keep=10, yes=False, clean_orphans=False)
+    cmd.cmd_prune(args, None)
+    out = capsys.readouterr().out
+    assert "orphaned (incomplete)" not in out

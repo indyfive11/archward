@@ -6,6 +6,75 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.11] — 2026-05-19
+
+**Cache management, inspector subcommands, and bug fixes.**
+
+### Added
+
+- **`archward cache` subcommand suite** — four new CLI actions for managing the
+  pacman package cache:
+  - `archward cache status` — retention policy, rollback-safety verdict
+    (DANGEROUS / TIGHT / BALANCED / GENEROUS / UNMANAGED), cache size, timer
+    state, and detected cleaning hooks.
+  - `archward cache gaps` — installed packages with no cached prior version (no
+    rollback candidate).
+  - `archward cache set-keep N` — writes `/etc/conf.d/pacman-contrib` and
+    enables `paccache.timer`. Requires systemd; non-systemd distros get a clear
+    bail message pointing to their init system's equivalent.
+  - `archward cache clean` — runs paccache with a pre-clean rollback-coverage
+    summary.
+
+- **`[cache]` config section** — three new fields: `managed` (bool, default
+  `false`), `keep_versions` (int, default 3), `warn_if_unmanaged` (bool,
+  default `true`).
+
+- **Preflight WARN for unmanaged cache** — when `warn_if_unmanaged = true`
+  (default) and no paccache policy is active (no timer, no hook), the pre-flight
+  phase now emits an overridable WARN instead of silently passing.
+
+- **`archward gates`** — standalone inspector subcommand. Runs pre-flight checks
+  (db.lck, cache-safety, Arch News, AUR quarantine FYI) and gate checks
+  (snapshot age, disk space) without starting an update. `--snapshot ID` targets
+  a specific snapshot for the age check. Exits 0 (all pass) / 1 (any fail) / 2
+  (warnings only).
+
+- **`archward risk`** — standalone inspector subcommand. Calls `checkupdates`
+  and classifies each pending package as HIGH / MEDIUM / LOW using the
+  pipeline's risk rules. Includes a transaction preview (replacements,
+  conflicts) and pending AUR updates via the configured helper. `--no-aur`
+  skips the AUR query. Always exits 0.
+
+- **`archward aur pending`** — new action under `archward aur`. Lists pending
+  AUR updates via the configured helper (`yay -Qua`, etc.) without snapshot
+  overhead. Exits 0 (no updates), 1 (helper error), 2 (no helper found).
+
+- **`snapshot prune --clean-orphans`** — incomplete snapshot directories (no
+  `.timestamp` marker, left by hard-killed pipeline runs) are now detected and
+  counted in `snapshot prune` output. `--clean-orphans` deletes them.
+
+### Fixed
+
+- **`snapshot prune` showed wrong "would delete" count** — `cmd_prune` inflated
+  the count by including `-after` sibling directories. The actual deletion
+  (`prune_snapshots()`) correctly counted only pre-snapshots. Now consistent.
+
+- **`--write-config` silently destroyed custom config** — running
+  `archward --write-config` on a system with hooks, services, and pacnew rules
+  overwrote everything with defaults and no backup. Now backs the existing config
+  up to `config.toml.bak` before overwriting, and prints the backup path.
+
+- **`rollback package` gave misleading error for non-critical packages** — when
+  a package was in `packages/all.txt` but not in `packages/critical.txt`, the
+  error said "was not captured in snapshot" (factually wrong). Now prints "not a
+  critical package — archward only rolls back critical.txt packages" with a
+  `pacman -U` hint and the snapshot version, or "was not installed at snapshot
+  time" when the package genuinely wasn't present.
+
+- **`rollback-cache` FAIL detail now mentions `archward cache status`** — the
+  no-hook / no-timer FAIL path now points users to the new cache management
+  subcommand as the next step.
+
 ## [0.4.10] — 2026-05-18
 
 **VPS deployment bug fixes.**

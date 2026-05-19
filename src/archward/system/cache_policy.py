@@ -390,6 +390,28 @@ def detect_cache_policy() -> CachePolicy:
     )
 
 
+def rollback_gaps(
+    installed: list[tuple[str, str]],
+    cache_names: set[str],
+) -> list[tuple[str, str]]:
+    """Return (name, version) pairs from `installed` with no rollback candidate.
+
+    A package has rollback coverage when the cache contains at least one file
+    starting with ``{name}-`` that is NOT the currently installed version.
+    If the only cached file is the current version (or none at all), the
+    package is a gap — it cannot be downgraded without fetching from an archive.
+    """
+    gaps = []
+    for name, ver in installed:
+        has_older = any(
+            fn.startswith(f"{name}-") and not fn.startswith(f"{name}-{ver}-")
+            for fn in cache_names
+        )
+        if not has_older:
+            gaps.append((name, ver))
+    return gaps
+
+
 def preset_commands(preset: CachePreset) -> list[list[str]]:
     """The exact privileged argv list a preset would run (for the GUI's
     preview-before-apply dialog). Does NOT execute anything.

@@ -155,21 +155,39 @@ def cmd_prune(args, config_path: Path | None) -> int:
 
     snap_dir = cfg.general.snapshot_dir
     paths = _list_snapshot_paths(snap_dir)
-    surplus = max(0, len(paths) - keep)
+    pre_paths = [p for p in paths if not p.name.endswith("-after")]
+    surplus = max(0, len(pre_paths) - keep)
+
+    # Detect orphaned dirs (no .timestamp — left by hard-killed runs).
+    snap_dir_path = Path(snap_dir)
+    orphans: list[Path] = []
+    if snap_dir_path.exists():
+        orphans = sorted(
+            p for p in snap_dir_path.iterdir()
+            if p.is_dir() and not (p / ".timestamp").exists()
+        )
 
     print(f"snapshot dir: {snap_dir}")
-    print(f"snapshots present: {len(paths)}")
+    print(f"snapshots present: {len(pre_paths)}")
     print(f"keep: {keep}")
     print(f"would delete: {surplus}")
 
-    if surplus == 0:
+    if orphans:
+        print(f"orphaned (incomplete) dirs: {len(orphans)}", end="")
+        if args.clean_orphans:
+            print()
+        else:
+            print("  (pass --clean-orphans to remove)")
+
+    if surplus == 0 and not (orphans and args.clean_orphans):
         print("nothing to prune.")
         return 0
 
-    print()
-    print("to be deleted (oldest first):")
-    for p in paths[keep:][::-1]:
-        print(f"  {p.name}")
+    if surplus > 0:
+        print()
+        print("to be deleted (oldest first):")
+        for p in pre_paths[keep:][::-1]:
+            print(f"  {p.name}")
 
     if not args.yes:
         print()
@@ -181,6 +199,12 @@ def cmd_prune(args, config_path: Path | None) -> int:
             print("aborted.")
             return 0
 
+    if orphans and args.clean_orphans:
+        for p in orphans:
+            _shutil.rmtree(p)
+            print(f"removed orphan: {p.name}")
+
     removed = prune_snapshots(cfg, keep=keep)
-    print(f"removed {len(removed)} snapshot(s).")
+    if removed:
+        print(f"removed {len(removed)} snapshot(s).")
     return 0

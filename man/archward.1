@@ -1,6 +1,6 @@
 .\" archward(1) manual page
 .\" Keep in sync with docs/cli.md and docs/recovery.md.
-.TH ARCHWARD 1 "2026-05-15" "archward 0.4.5" "User Commands"
+.TH ARCHWARD 1 "2026-05-19" "archward 0.4.11" "User Commands"
 .SH NAME
 archward \- safe-update pipeline and recovery toolset for Arch-based Linux
 .SH SYNOPSIS
@@ -70,7 +70,10 @@ Run distro / kernel / AUR-helper / service detection, propose a config
 diff, and exit.
 .TP
 .B \-\-write\-config
-Overwrite the config file with archward defaults and exit.
+Write archward defaults to the config file and exit. If the file
+already exists it is backed up to
+.I <file>.bak
+first.
 .TP
 .B \-\-version
 Print version and exit.
@@ -83,6 +86,28 @@ and
 .B \-\-auto
 are mutually exclusive.
 .SH SUBCOMMANDS
+.SS archward gates [\-\-snapshot ID]
+Run the pre-flight and gate checks the pipeline would run before any
+update, without taking a snapshot or performing an update.
+Pre-flight checks: pacman DB lock, cache-safety WARN, Arch News feed,
+AUR quarantine FYI.
+Gate checks: snapshot age (using the specified or latest snapshot) and
+disk space. If no snapshots exist, the age check is skipped and the
+disk check runs inline.
+Exit 0 if all pass; exit 1 if any FAIL; exit 2 for warnings only.
+.SS archward risk [\-\-no\-aur]
+Classify pending updates by risk level without running an update,
+using the same
+.B checkupdates
+classification as the full pipeline.
+Output is grouped HIGH \(-> MEDIUM \(-> LOW. A transaction preview
+(replacements, conflicts from
+.BR "pacman \-Sup" )
+follows if applicable.
+Pending AUR updates from the configured helper are shown last.
+.B \-\-no\-aur
+suppresses the AUR section.
+Always exits 0 \(em risk classification is informational.
 .SS archward verify [\-\-snapshot ID]
 Re-run the verify phase against an existing snapshot. No new snapshot
 is taken and no update is performed. This is the post-reboot
@@ -146,7 +171,7 @@ sizes, and the critical-package list with versions. Use this to find
 the filename to pass to
 .B archward rollback config
 and to compare snapshot package versions against the installed set.
-.SS archward snapshot prune [\-\-keep N] [\-\-yes]
+.SS archward snapshot prune [\-\-keep N] [\-\-yes] [\-\-clean\-orphans]
 Delete old snapshots, keeping the
 .I N
 newest (default:
@@ -154,6 +179,10 @@ newest (default:
 Without
 .BR \-\-yes ,
 lists the snapshots to be deleted and asks for confirmation.
+.B \-\-clean\-orphans
+also removes incomplete snapshot directories with no
+.B .timestamp
+marker (left behind by a hard-killed run).
 .SS archward rollback config ID FILENAME
 Restore one captured config to its live
 .I /etc
@@ -207,6 +236,36 @@ With
 .IR PKG ,
 clears that package; exits 2 if it is not found in the quarantine state.
 Resolved entries cannot be "re-cleared" (exit 0, no-op).
+.SS archward aur pending
+List pending AUR updates from the auto-detected helper without running
+an update. Uses the same helper-preference order as the pipeline
+(yay \(-> paru \(-> aurutils). Exit 2 if no helper is found on PATH.
+Exit 1 if the helper query fails. Exit 0 when the list is empty.
+.SS archward cache status
+Show the current pacman cache retention policy, cache size, and
+rollback-safety verdict (DANGEROUS / TIGHT / BALANCED / GENEROUS /
+UNMANAGED). Includes paccache.timer state, effective keep count,
+CleanMethod from pacman.conf, file count and total size, and any active
+post-transaction cleaning hooks (flagged DANGEROUS). Always exits 0.
+.SS archward cache gaps
+List installed packages that have no cached prior version and therefore
+cannot be rolled back from cache. Prints each as
+.BR "name  version" .
+Exit 0 always.
+.SS archward cache set\-keep N [\-\-force]
+Write a paccache.timer drop-in retaining
+.I N
+versions per package and enable the timer (requires sudo).
+Minimum 2 unless
+.B \-\-force
+is given. Exit 2 if N < 2 without
+.B \-\-force
+or if paccache.timer is not available (non-systemd distros).
+Exit 1 on write or systemctl failure.
+.SS archward cache clean
+Run paccache immediately, pruning to the current effective keep count.
+Shows cache size, the prune plan, and asks for confirmation when stdin
+is a TTY. Exit 0 on success or user abort. Exit 1 on paccache failure.
 .SS archward pacnew list
 Scan
 .I /etc
@@ -254,7 +313,9 @@ operation failed (verify FAIL, pacman \-U non-zero, restore error)
 .B 2
 invalid args or refused (boot-critical without
 .BR \-\-confirm\-boot\-critical ,
-unknown filename / package / pacnew action)
+unknown filename / package / pacnew action, no AUR helper found);
+.B archward gates:
+warnings only (no FAIL)
 .TP
 .B 3
 snapshot not found or incomplete (missing

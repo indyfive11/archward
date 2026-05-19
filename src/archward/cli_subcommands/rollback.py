@@ -32,6 +32,7 @@ from archward.pipeline.rollback import (
     list_snapshot_configs,
     packages_removed_since_snapshot,
     plan_bulk_package_apply,
+    read_installed_packages_at_snapshot,
     reinstall_from_aur,
     reinstall_from_repos,
     restore_all_configs,
@@ -156,12 +157,24 @@ def cmd_package(args, config_path: Path | None) -> int:
     )
     snap_version = next((v for n, v in pairs if n == args.package), None)
     if snap_version is None:
-        print(
-            f"archward rollback package: {args.package!r} was not captured in "
-            f"snapshot {args.snapshot_id}. Use `archward snapshot show <id>` to "
-            "see captured packages.",
-            file=sys.stderr,
-        )
+        all_pkgs = read_installed_packages_at_snapshot(snap_path)
+        if args.package in all_pkgs:
+            snap_ver = all_pkgs[args.package]
+            print(
+                f"archward rollback package: {args.package!r} ({snap_ver} at snapshot "
+                f"time) is not a critical package — archward only rolls back packages "
+                f"tracked in packages/critical.txt (glibc, systemd, kernels, AUR "
+                f"foreign). To downgrade manually:\n"
+                f"  pacman -U /var/cache/pacman/pkg/{args.package}-{snap_ver}-*.pkg.tar.*",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"archward rollback package: {args.package!r} was not installed at "
+                f"snapshot time {args.snapshot_id}. Use `archward snapshot show <id>` "
+                "to see captured packages.",
+                file=sys.stderr,
+            )
         return 2
 
     # Boot-critical gate.

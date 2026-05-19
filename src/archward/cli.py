@@ -89,6 +89,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _attach_rollback_parser(subparsers)
     _attach_pacnew_parser(subparsers)
     _attach_aur_parser(subparsers)
+    _attach_cache_parser(subparsers)
+    _attach_gates_parser(subparsers)
+    _attach_risk_parser(subparsers)
 
     return p
 
@@ -147,6 +150,10 @@ def _attach_snapshot_parser(subparsers) -> None:
     prune_p.add_argument(
         "--yes", action="store_true",
         help="Skip the confirmation prompt.",
+    )
+    prune_p.add_argument(
+        "--clean-orphans", action="store_true",
+        help="Also remove incomplete snapshot dirs (no .timestamp marker, e.g. from a hard-killed run).",
     )
 
 
@@ -284,6 +291,66 @@ def _attach_aur_parser(subparsers) -> None:
     clear_p.add_argument(
         "--yes", action="store_true",
         help="Skip the confirmation prompt when clearing all entries.",
+    )
+
+    aur_sub.add_parser(
+        "pending",
+        help="List pending AUR updates (requires an AUR helper on PATH).",
+    )
+
+
+def _attach_cache_parser(subparsers) -> None:
+    """`archward cache {status,gaps,set-keep,clean}` — pacman cache management."""
+    sp = subparsers.add_parser(
+        "cache",
+        help="Inspect and manage the pacman package cache.",
+    )
+    sub = sp.add_subparsers(dest="cache_action", metavar="<action>")
+
+    sub.add_parser("status", help="Show retention policy, cache size, and rollback-safety verdict.")
+    sub.add_parser("gaps", help="List installed packages with no cached prior version.")
+
+    sk = sub.add_parser("set-keep", help="Set retention policy (keep N versions). Requires sudo.")
+    sk.add_argument("n", type=int, metavar="N", help="Versions to keep per package (minimum 2).")
+    sk.add_argument("--force", action="store_true", help="Allow N < 2 (not recommended).")
+
+    sub.add_parser("clean", help="Run paccache now with a pre-clean rollback-coverage summary.")
+
+
+def _attach_gates_parser(subparsers) -> None:
+    """`archward gates` — run pre-flight and gate checks without an update."""
+    sp = subparsers.add_parser(
+        "gates",
+        help="Run pre-flight and gate checks without starting an update.",
+        description=(
+            "Runs the same pre-flight and gate checks the pipeline would run: "
+            "pacman DB lock, cache-safety, Arch News, disk space, and snapshot "
+            "age. Uses the latest snapshot for the age check (or skips it if "
+            "no snapshots exist). Exits 0 if all pass, 1 if any fail, 2 if "
+            "warnings only (no fail)."
+        ),
+    )
+    sp.add_argument(
+        "--snapshot", metavar="ID", default=None,
+        help="Use a specific snapshot for the age check (default: latest).",
+    )
+
+
+def _attach_risk_parser(subparsers) -> None:
+    """`archward risk` — risk-classify pending updates without an update."""
+    sp = subparsers.add_parser(
+        "risk",
+        help="Show risk classification for pending updates without running an update.",
+        description=(
+            "Runs checkupdates and classifies each pending package as HIGH, "
+            "MEDIUM, or LOW risk using the same rules as the update pipeline. "
+            "Also shows pending AUR updates (unclassified) if a helper is "
+            "available. Always exits 0."
+        ),
+    )
+    sp.add_argument(
+        "--no-aur", action="store_true",
+        help="Skip the AUR pending-list query.",
     )
 
 
@@ -456,9 +523,15 @@ def main(argv: list[str] | None = None) -> int:
         return _dispatch_subcommand(args, config_path)
 
     if args.write_config:
+        import shutil
         from archward.config.defaults import default_config
 
         cfg = default_config()
+        target = config_path or default_config_path()
+        if target.exists():
+            backup = target.with_suffix(".toml.bak")
+            shutil.copy2(target, backup)
+            print(f"backed up existing config to {backup}")
         path = write_config(cfg, config_path)
         print(f"wrote defaults to {path}")
         return 0
@@ -589,8 +662,28 @@ def _dispatch_subcommand(args, config_path) -> int:
                 return cmd.cmd_quarantine_clear(args, config_path)
             print("archward aur quarantine: missing action — try `archward aur quarantine --help`", file=sys.stderr)
             return 2
+        if args.aur_action == "pending":
+            return cmd.cmd_pending(args, config_path)
         print("archward aur: missing action — try `archward aur --help`", file=sys.stderr)
         return 2
+    if args.command == "cache":
+        from archward.cli_subcommands import cache as cmd
+        if args.cache_action == "status":
+            return cmd.cmd_status(args, config_path)
+        if args.cache_action == "gaps":
+            return cmd.cmd_gaps(args, config_path)
+        if args.cache_action == "set-keep":
+            return cmd.cmd_set_keep(args, config_path)
+        if args.cache_action == "clean":
+            return cmd.cmd_clean(args, config_path)
+        print("archward cache: specify an action — try `archward cache --help`", file=sys.stderr)
+        return 2
+    if args.command == "gates":
+        from archward.cli_subcommands import gates as cmd
+        return cmd.cmd_gates(args, config_path)
+    if args.command == "risk":
+        from archward.cli_subcommands import risk as cmd
+        return cmd.cmd_risk(args, config_path)
     print(f"archward: unknown command {args.command!r}", file=sys.stderr)
     return 2
 

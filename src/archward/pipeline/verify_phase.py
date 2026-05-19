@@ -309,7 +309,9 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
         "hook so future updates stay recoverable."
         if hooks
         else "The pre-update package files are no longer in any cache "
-        "(paccache, a manual pacman -Sc, or yay/paru cache pruning removed them)."
+        "(paccache, a manual pacman -Sc, or yay/paru cache pruning removed them). "
+        "Run `archward cache status` to review your retention policy, or set "
+        "[cache] managed = true  keep_versions = 3 in config.toml to automate it."
     )
     shown = ", ".join(missing[:20]) + (" …" if len(missing) > 20 else "")
     return VerifyCheck(

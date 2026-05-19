@@ -125,3 +125,32 @@ def cmd_quarantine_clear(args, config_path: Path | None) -> int:
     else:
         print("No active quarantine entries to clear.")
     return 0
+
+
+# ── pending ───────────────────────────────────────────────────────────────────
+
+
+def cmd_pending(args, config_path: Path | None) -> int:
+    """List pending AUR updates via the configured helper."""
+    cfg = build_config(config_path)
+    from archward.aur.helper import discover
+    helper = discover(tuple(cfg.aur.helper_preference))
+    if helper is None:
+        print(
+            "No AUR helper found. Install yay, paru, or aurutils and ensure "
+            "it's in your PATH.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        pending = helper.list_pending()
+    except Exception as exc:
+        print(f"Failed to query AUR helper ({helper.name}): {exc}", file=sys.stderr)
+        return 1
+    if not pending:
+        print(f"No pending AUR updates ({helper.name}).")
+        return 0
+    print(f"{len(pending)} pending AUR update(s) ({helper.name}):")
+    for name, old, new in sorted(pending):
+        print(f"  {name:<30} {old} → {new}")
+    return 0

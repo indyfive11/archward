@@ -10,6 +10,7 @@ from __future__ import annotations
 from archward.config import paths
 from archward.models.config import (
     AurConfig,
+    CacheConfig,
     ConfigModel,
     GatesConfig,
     GeneralConfig,
@@ -169,4 +170,5 @@ def default_config() -> ConfigModel:
             timeout_seconds=60,
             fail_pipeline_on_error=False,
         ),
+        cache=CacheConfig(managed=False, keep_versions=3, warn_if_unmanaged=True),
     )

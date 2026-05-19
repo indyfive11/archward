@@ -9,6 +9,10 @@ archward has two invocation shapes:
    pacnew) so a user without a working GUI can recover.
    `archward aur quarantine` (v0.4.6+) manages the AUR build
    quarantine state without needing the GUI or sudo.
+   **v0.4.11 additions:** `archward gates` and `archward risk` expose
+   the pre-update checks standalone; `archward aur pending` lists
+   pending AUR updates; `archward cache` inspects and manages the
+   pacman package cache.
 
 For a task-oriented "my system broke, what do I type" walkthrough see
 **[`docs/recovery.md`](recovery.md)**. This document is the exhaustive
@@ -30,7 +34,7 @@ archward [flags]
 | `--no-aur` | Skip the AUR phase regardless of `aur.enabled`. |
 | `--profile NAME` | Use `~/.config/archward/profiles/<NAME>.toml` instead of the default config. NAME must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. First run bootstraps the file with defaults. |
 | `--detect` | Run distro / kernel / AUR-helper / service detection, propose a config diff, exit. |
-| `--write-config` | Overwrite the config file with defaults and exit. |
+| `--write-config` | Write defaults to the config file and exit. If the file already exists it is backed up to `<file>.bak` first. |
 | `--version` | Print version, exit. |
 | `--help` | Usage, exit. |
 
@@ -45,6 +49,59 @@ subcommand: `archward --profile lab verify`).
 1  RESULT:UPDATE_FAILED / RESULT:VERIFY_FAILED
 2  RESULT:REBOOT_NEEDED  (informational; user must reboot)
 ```
+
+---
+
+## `archward gates`
+
+Run the pre-flight and gate checks the pipeline would run before any
+update, **without taking a snapshot or performing an update**.
+
+```
+archward gates [--snapshot ID]
+```
+
+| Flag | Effect |
+|---|---|
+| `--snapshot ID` | Use this snapshot for the age check. Default: the latest. |
+
+**Pre-flight checks** (always run): pacman DB lock, cache-safety WARN,
+Arch News feed, AUR quarantine FYI.
+
+**Gate checks**: snapshot age (against the resolved snapshot) and disk
+space. If no snapshots exist the age check is SKIPped and the disk
+check runs inline.
+
+### Exit codes
+
+```
+0  all checks pass
+1  one or more FAIL
+2  warnings only (no FAIL)
+```
+
+---
+
+## `archward risk`
+
+Classify pending updates by risk level, **without running an update**.
+Uses the same `checkupdates`-based classification as the pipeline.
+
+```
+archward risk [--no-aur]
+```
+
+| Flag | Effect |
+|---|---|
+| `--no-aur` | Skip the AUR pending-list query. |
+
+Output is grouped HIGH → MEDIUM → LOW. Packages with a reason (kernel,
+glibc, etc.) show it in parentheses. Transaction preview (replacements,
+conflicts) follows if `pacman -Sup` reports any. AUR pending updates
+from the configured helper are shown last (suppressed by `--no-aur`
+or when `aur.enabled = false`).
+
+Always exits 0 — risk classification is informational.
 
 ---
 
@@ -185,9 +242,11 @@ archward snapshot prune [--keep N] [--yes]
 |---|---|
 | `--keep N` | Number to retain. Default: `cfg.general.keep_snapshots`. |
 | `--yes` | Skip the confirmation prompt. |
+| `--clean-orphans` | Also remove incomplete snapshot directories that have no `.timestamp` marker (e.g. left behind by a hard-killed run). |
 
 Without `--yes`, prints exactly which snapshots will be deleted
-(oldest first) and asks `proceed? [y/N]`.
+(oldest first) and asks `proceed? [y/N]`. Orphan directories are
+listed separately and only removed when `--clean-orphans` is passed.
 
 ---
 
@@ -233,11 +292,21 @@ archward rollback package <snapshot-id> <pkg-name> [--confirm-boot-critical]
 |---|---|
 | `--confirm-boot-critical` | Required when `<pkg>` is boot-critical (glibc, systemd, openssl, lib32-glibc, lib32-openssl, systemd-libs). Even with this flag, you must type `YES` (case-sensitive) on stdin. |
 
-Exit 2 if the package wasn't captured in the snapshot, or if it's
-boot-critical and `--confirm-boot-critical` was omitted. Exit 1 if
-the cache lacks the snapshot version (with a clear message) or the
-`pacman -U` fails. Exit 0 on success **or** if the user declines the
-YES gate (declining is a valid choice, not an error).
+**Scope:** Only packages tracked in `packages/critical.txt` are eligible —
+glibc, systemd, openssl, mesa, pipewire, openssh, kernels, and AUR foreign
+packages. Standard repo packages (vim, git, curl, etc.) are not eligible even
+if present in the snapshot's `packages/all.txt`. To downgrade any other
+package manually, use pacman directly:
+
+```
+pacman -U /var/cache/pacman/pkg/<pkg>-<version>-*.pkg.tar.*
+```
+
+Exit 2 if the package wasn't captured in the snapshot (or isn't a critical
+package), or if it's boot-critical and `--confirm-boot-critical` was omitted.
+Exit 1 if the cache lacks the snapshot version (with a clear message) or the
+`pacman -U` fails. Exit 0 on success **or** if the user declines the YES gate
+(declining is a valid choice, not an error).
 
 ### `archward rollback all-configs <id> [--yes]`
 
@@ -338,6 +407,91 @@ with full row editing for active (`counting` / `quarantined`) rows:
 Buttons below the table: **Clear selected**, **Clear resolved** (remove
 resolved-only rows), **Clear all**.
 
+### `archward aur pending`
+
+List pending AUR updates from the auto-detected helper without taking
+a snapshot or running an update.
+
+```
+archward aur pending
+```
+
+Uses the same helper-preference order as the full pipeline
+(`yay` → `paru` → `aurutils`). Exit 2 if no helper is found. Exit 1 if
+the helper query fails. Exit 0 with a "no pending updates" message if
+the list is empty.
+
+---
+
+## `archward cache`
+
+Inspect and manage the pacman package cache. All four actions share a
+read-only default path; only `set-keep` and `clean` need sudo.
+
+### `archward cache status`
+
+Show the current retention policy, cache size, and rollback-safety
+verdict.
+
+```
+archward cache status
+```
+
+Output includes: rollback safety verdict (`DANGEROUS` / `TIGHT` /
+`BALANCED` / `GENEROUS` / `UNMANAGED`), paccache.timer state and
+effective keep count, `PACCACHE_ARGS` if set, `CleanMethod` from
+`pacman.conf`, cache size and file count, and any active post-transaction
+cleaning hooks (flagged `[DANGEROUS]`). Followed by a plain-English
+explanation of the verdict.
+
+Always exits 0.
+
+### `archward cache gaps`
+
+List installed packages that have **no cached prior version** — i.e.
+packages that cannot be rolled back from cache if the current version
+breaks.
+
+```
+archward cache gaps
+```
+
+Prints each gap as `<name>  <current-version>`. "No rollback gaps"
+means every installed package has at least one older version in the
+cache. Exit 0 always.
+
+### `archward cache set-keep N [--force]`
+
+Write a `paccache.timer` drop-in that retains N versions per package,
+and enable the timer.
+
+```
+archward cache set-keep N [--force]
+```
+
+| Arg / Flag | Effect |
+|---|---|
+| `N` | Versions to keep per package. Minimum 2 (enforced). |
+| `--force` | Allow N < 2 (not recommended). |
+
+Writes `/etc/systemd/system/paccache.service.d/archward.conf`
+(requires sudo), then runs `systemctl enable --now paccache.timer`.
+Exit 2 if N < 2 without `--force`, or if paccache.timer is not
+available (non-systemd distros). Exit 1 if the write or systemctl
+command fails.
+
+### `archward cache clean`
+
+Run paccache immediately, pruning to the current effective keep count.
+
+```
+archward cache clean
+```
+
+Shows cache size, the prune plan, and asks `Proceed? [y/N]` (skipped
+when stdin is not a TTY). Exit 0 on success or user abort. Exit 1 if
+paccache exits non-zero.
+
 ---
 
 ## `archward pacnew`
@@ -389,7 +543,8 @@ denied), exit 2 for an unknown action, exit 3 if no `.pacnew` exists.
 0  success / user declined a confirmation (a valid choice)
 1  operation failed (verify FAIL, pacman -U non-zero, restore error)
 2  invalid args or refused (boot-critical without --confirm, unknown
-   filename/package, unknown pacnew action)
+   filename/package, unknown pacnew action, no AUR helper found);
+   archward gates: warnings only (no FAIL)
 3  snapshot not found or incomplete
 ```
 
