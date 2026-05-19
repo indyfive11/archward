@@ -202,3 +202,43 @@ def test_script_not_found_uses_inline(monkeypatch, tmp_path) -> None:
     result = verify_phase._stale_libs_check(_cfg())
     assert called
     assert result.status is CheckStatus.PASS
+
+
+# ── reboot threshold (v0.4.12) ────────────────────────────────────────────────
+
+def _entries(n: int) -> list[dict]:
+    return [{"unit": f"svc{i}.service", "deleted": ["/usr/lib/libfoo.so"]} for i in range(n)]
+
+
+def test_below_threshold_says_restart(monkeypatch) -> None:
+    """< 5 stale services → 'restart recommended'."""
+    monkeypatch.setattr(verify_phase, "_sudo_scan", lambda _: _entries(4))
+    monkeypatch.setattr(verify_phase, "_SCAN_SCRIPT_CANDIDATES",
+                        [Path("/usr/share/archward/stale_libs_scan")])
+    with patch.object(Path, "exists", return_value=True):
+        result = verify_phase._stale_libs_check(_cfg())
+    assert result.status is CheckStatus.WARN
+    assert "restart recommended" in result.message
+    assert "reboot recommended" not in result.message
+
+
+def test_at_threshold_says_reboot(monkeypatch) -> None:
+    """= 5 stale services → 'reboot recommended'."""
+    monkeypatch.setattr(verify_phase, "_sudo_scan", lambda _: _entries(5))
+    monkeypatch.setattr(verify_phase, "_SCAN_SCRIPT_CANDIDATES",
+                        [Path("/usr/share/archward/stale_libs_scan")])
+    with patch.object(Path, "exists", return_value=True):
+        result = verify_phase._stale_libs_check(_cfg())
+    assert result.status is CheckStatus.WARN
+    assert "reboot recommended" in result.message
+
+
+def test_above_threshold_says_reboot(monkeypatch) -> None:
+    """19 stale services → 'reboot recommended'."""
+    monkeypatch.setattr(verify_phase, "_sudo_scan", lambda _: _entries(19))
+    monkeypatch.setattr(verify_phase, "_SCAN_SCRIPT_CANDIDATES",
+                        [Path("/usr/share/archward/stale_libs_scan")])
+    with patch.object(Path, "exists", return_value=True):
+        result = verify_phase._stale_libs_check(_cfg())
+    assert result.status is CheckStatus.WARN
+    assert "reboot recommended" in result.message

@@ -203,6 +203,8 @@ class SnapshotBrowser(QDialog):
         strategy: SudoStrategy,
         bus: EventBus | None,
         parent=None,
+        *,
+        select_id: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Archward — Snapshot Browser")
@@ -211,6 +213,7 @@ class SnapshotBrowser(QDialog):
         self._cfg = cfg
         self._strategy = strategy
         self._bus = bus
+        self._select_id = select_id
         self._installed_versions: dict[str, str] = {}
         self._removed_scan_snap: Path | None = None
         self._removed_worker: _RollbackWorker | None = None
@@ -443,7 +446,8 @@ class SnapshotBrowser(QDialog):
                 "No snapshots yet.\n\nRun an update to create your first one."
             )
             return
-        for snap in candidates:
+        select_row = 0
+        for idx, snap in enumerate(candidates):
             ts = _read_timestamp(snap)
             label = f"{snap.name}"
             if ts is not None:
@@ -459,8 +463,9 @@ class SnapshotBrowser(QDialog):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, snap)
             self._snap_list.addItem(item)
-        # Auto-select newest.
-        self._snap_list.setCurrentRow(0)
+            if self._select_id and snap.name == self._select_id:
+                select_row = idx
+        self._snap_list.setCurrentRow(select_row)
 
     # ── Selection-driven detail ────────────────────────────────────────────
 

@@ -619,6 +619,7 @@ def _orphan_check() -> VerifyCheck:
 
 
 _STALE_LIBS_TIMEOUT_S = 20.0
+_STALE_LIBS_REBOOT_THRESHOLD = 5  # above this many services, reboot > individual restarts
 
 # Candidate paths for the stale_libs_scan helper (installed → dev tree).
 _SCAN_SCRIPT_CANDIDATES = [
@@ -762,12 +763,13 @@ def _stale_libs_check(cfg: ConfigModel) -> VerifyCheck:
             "  (system services not scanned — add sudoers entry for full coverage,"
             " see docs/development.md)"
         )
+    action = "reboot recommended" if n >= _STALE_LIBS_REBOOT_THRESHOLD else "restart recommended"
     return VerifyCheck(
         bucket="universal",
         name="stale-libs",
         status=CheckStatus.WARN,
         message=f"{n} service{'s' if n != 1 else ''} running deleted library versions"
-                " — restart recommended",
+                f" — {action}",
         detail="\n".join(lines),
     )
 

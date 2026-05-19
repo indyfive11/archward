@@ -60,6 +60,7 @@ class PipelineResult:
     post_hook_results: tuple[HookResult, ...] = ()
     summary: ReportSummary | None = None
     aborted_reason: str | None = None
+    snapshot_id: str | None = None
 
 
 def _ask_yes_no(prompt: str) -> bool:
@@ -166,6 +167,7 @@ def run_pipeline(
 
     # ── Snapshot ────────────────────────────────────────────────────────────
     snapshot = snapshot_phase.take_snapshot(cfg, strategy, bus)
+    result.snapshot_id = snapshot.meta.snapshot_id
 
     # ── Gates ───────────────────────────────────────────────────────────────
     gate_results = gates_phase.run_gates(cfg, snapshot, bus)

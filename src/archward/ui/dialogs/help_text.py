@@ -368,13 +368,12 @@ HELP: dict[tuple[str, str], str] = {
         "If `arch-audit` is installed, it will handle this check instead."
     ),
     ("verify_hint", "stale-libs"): (
-        "Restart each listed service to load the updated libraries.\n"
-        "For system services:\n"
-        "  sudo systemctl restart <unit>\n"
-        "For user services (kwin_wayland, pipewire, wireplumber, etc.):\n"
-        "  systemctl --user restart <unit>\n"
-        "Or log out and back in to restart all user-session services at once.\n"
-        "A full reboot resolves all stale-library issues simultaneously."
+        "A reboot resolves all stale-library issues simultaneously and is the "
+        "most practical choice when many services are affected.\n\n"
+        "To restart services individually instead:\n"
+        "  sudo systemctl restart <system-unit>\n"
+        "  systemctl --user restart <user-unit>  (e.g. pipewire, wireplumber)\n"
+        "Or log out and back in to restart all user-session services at once."
     ),
 
     # ── Profiles ──────────────────────────────────────────────────────────

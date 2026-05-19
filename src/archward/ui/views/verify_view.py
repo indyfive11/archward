@@ -200,10 +200,9 @@ class VerifyView(QWidget):
         self._tree.expandAll()
 
     def _maybe_attach_hint_button(self, item: QTreeWidgetItem, check) -> None:
-        """Place a 'What to do?' button in column 3 for FAIL rows that have
-        a registered hint. Other rows (PASS/WARN, or unknown check names)
-        get nothing in that column."""
-        if check.status is not CheckStatus.FAIL:
+        """Place a 'What to do?' button in column 3 for FAIL or WARN rows that
+        have a registered hint. PASS rows never get guidance."""
+        if check.status is CheckStatus.PASS:
             return
         hint_key = _hint_key_for(check.bucket, check.name)
         hint = help_text.get("verify_hint", hint_key)

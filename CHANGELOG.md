@@ -6,6 +6,44 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.12] — 2026-05-19
+
+**GUI communication improvements — closer alignment between what archward does and what it shows.**
+
+### Added
+
+- **"What to do?" on WARN rows** — the remediation-hint button in the Verify view
+  previously only appeared on FAIL rows. It now appears on WARN rows too when a
+  hint is registered (`stale-libs`, `orphans`, `security-advisories`). PASS rows
+  are still excluded.
+
+- **Stale-libs reboot threshold** — when 5 or more services are running deleted
+  library versions the verify message now reads "reboot recommended" instead of
+  "restart recommended". Restarting 19 units individually is impractical; a reboot
+  is the real answer. The verify hint for `stale-libs` now leads with the reboot
+  option.
+
+- **SUCCESS-with-warnings banner** — when a run completes cleanly but has verify
+  WARNs, the result banner label now reads `"Success  ▲ N warnings"` instead of
+  just `"Success"`. The warn count was already in the right-side detail text but
+  was easy to miss; now it is in the primary label.
+
+- **AUR quarantine failure reason** — the result view's quarantine section now
+  shows a one-line failure reason under each quarantined package (first 80 chars
+  of the build error). Previously only the status and retry date were shown,
+  giving no signal whether the issue is upstream or local.
+
+- **Rollback point surfaced at end of run** — after every successful update the
+  result banner shows a clickable `"rollback: <snapshot-id> →"` link. Clicking
+  it opens the Snapshot Browser pre-selected to that snapshot. The full-page
+  result view also shows `"Rollback point: <id>"` with a reminder to use
+  `Ctrl+B` or `archward rollback` if something breaks.
+
+### Changed
+
+- `PipelineResult` dataclass gains a `snapshot_id: str | None` field, populated
+  after the snapshot phase completes.
+
 ## [0.4.11] — 2026-05-19
 
 **Cache management, inspector subcommands, and bug fixes.**

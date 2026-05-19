@@ -344,6 +344,7 @@ class MainWindow(QMainWindow):
 
         # Connect orphan CTA in the result banner to the manager dialog.
         self._result_banner.orphan_manage_requested.connect(self._open_orphan_manager)
+        self._result_banner.rollback_requested.connect(self._on_rollback_requested)
 
         # ── Tools menu ─────────────────────────────────────────────────────
         tools_menu = self.menuBar().addMenu("&Tools")
@@ -625,6 +626,15 @@ class MainWindow(QMainWindow):
         # through the same log pane); otherwise the browser falls back to the
         # logging module.
         dlg = SnapshotBrowser(self.cfg, self.strategy, self.bus, parent=self)
+        dlg.exec()
+
+    def _on_rollback_requested(self, snapshot_id: str) -> None:
+        if self.worker is not None and self.worker.isRunning():
+            self._status.showMessage("Pipeline running — close it before browsing snapshots.")
+            return
+        dlg = SnapshotBrowser(
+            self.cfg, self.strategy, self.bus, select_id=snapshot_id, parent=self
+        )
         dlg.exec()
 
     def _open_orphan_manager(self, orphans: list[str]) -> None:

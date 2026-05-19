@@ -47,6 +47,7 @@ def _colors_for(severity: str) -> tuple[str, str]:
 
 class ResultBanner(QWidget):
     orphan_manage_requested = Signal(list)  # list[str] of orphan package names
+    rollback_requested = Signal(str)        # snapshot_id str
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -63,6 +64,16 @@ class ResultBanner(QWidget):
         self._orphan_btn.setVisible(False)
         self._orphan_btn.clicked.connect(self._on_orphan_clicked)
         self._orphans: list[str] = []
+        self._rollback_btn = QPushButton("")
+        self._rollback_btn.setFlat(True)
+        self._rollback_btn.setStyleSheet(
+            f"QPushButton {{ color: {_brand.accent_text_css}; "
+            f"text-decoration: underline; padding: 0 8px; }}"
+            f"QPushButton:hover {{ background: {_brand.accent_bg_tint}; }}"
+        )
+        self._rollback_btn.setVisible(False)
+        self._rollback_btn.clicked.connect(self._on_rollback_clicked)
+        self._rollback_snapshot_id: str | None = None
         self._detail = QLabel("")
         self._detail.setStyleSheet("padding: 2px 10px;")
         self._detail.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
@@ -72,6 +83,7 @@ class ResultBanner(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._label)
         layout.addWidget(self._orphan_btn)
+        layout.addWidget(self._rollback_btn)
         layout.addWidget(self._detail, stretch=1)
 
         self.setFixedHeight(24)
@@ -79,6 +91,10 @@ class ResultBanner(QWidget):
 
     def _on_orphan_clicked(self) -> None:
         self.orphan_manage_requested.emit(self._orphans)
+
+    def _on_rollback_clicked(self) -> None:
+        if self._rollback_snapshot_id:
+            self.rollback_requested.emit(self._rollback_snapshot_id)
 
     def show_result(self, result: PipelineResult) -> None:
         if result.summary is None:
@@ -92,6 +108,12 @@ class ResultBanner(QWidget):
         tag = result.summary.tag
         severity, human = _TAG_INFO.get(tag, ("neutral", tag))
         bg, fg = _colors_for(severity)
+
+        # Feature 3: SUCCESS with warnings → show warn count in the label itself.
+        if tag == "RESULT:SUCCESS" and result.verify and result.summary.warn_count > 0:
+            wc = result.summary.warn_count
+            human = f"Success  ▲ {wc} warning{'s' if wc != 1 else ''}"
+
         self._label.setText(human)
         self._apply_style(bg, fg)
 
@@ -104,12 +126,23 @@ class ResultBanner(QWidget):
                     break
         self._orphan_btn.setVisible(bool(self._orphans))
 
+        # Rollback chip — show snapshot ID as a clickable link when available.
+        self._rollback_snapshot_id = result.snapshot_id
+        if result.snapshot_id and tag != "RESULT:UPDATE_FAILED":
+            self._rollback_btn.setText(f"rollback: {result.snapshot_id} →")
+            self._rollback_btn.setVisible(True)
+        else:
+            self._rollback_btn.setVisible(False)
+
         # Right-side detail: a compact one-liner of the most relevant context.
         bits: list[str] = []
         for sec in result.summary.secondary_tags:
             _sev2, sec_human = _TAG_INFO.get(sec, ("neutral", sec))
             bits.append(f"+ {sec_human}")
-        if result.summary.fail_count or result.summary.warn_count:
+        # Suppress warn count from detail when SUCCESS (already in the label).
+        if result.summary.fail_count or (
+            result.summary.warn_count and tag != "RESULT:SUCCESS"
+        ):
             bits.append(
                 f"verify: {result.summary.fail_count} FAIL · "
                 f"{result.summary.warn_count} WARN"
@@ -130,6 +163,8 @@ class ResultBanner(QWidget):
         self._detail.setText("")
         self._orphan_btn.setVisible(False)
         self._orphans = []
+        self._rollback_btn.setVisible(False)
+        self._rollback_snapshot_id = None
         self.setVisible(False)
 
     def _apply_style(self, bg: str, fg: str) -> None:

@@ -1,9 +1,8 @@
 """Tests for VerifyView's 'What to do?' remediation-hint buttons (F5, v0.4.0).
 
-The renderer attaches a button via setItemWidget on FAIL rows that have a
-registered hint key. PASS/WARN rows and FAIL rows with unknown check
-names get nothing. The hint text comes from help_text.HELP under the
-verify_hint section.
+The renderer attaches a button via setItemWidget on FAIL or WARN rows that
+have a registered hint key. PASS rows and rows with unknown check names get
+nothing. The hint text comes from help_text.HELP under the verify_hint section.
 """
 
 from __future__ import annotations
@@ -77,13 +76,31 @@ def test_pass_check_gets_no_button(qapp) -> None:
     assert btn is None
 
 
-def test_warn_check_gets_no_button(qapp) -> None:
+def test_warn_check_with_hint_gets_button(qapp) -> None:
+    """v0.4.12: WARN rows with a registered hint now show 'What to do?'."""
     view = _view_with_checks([
         VerifyCheck(
             bucket="universal",
             name="pacnew",
             status=CheckStatus.WARN,
             message="3 .pacnew files present",
+        ),
+    ])
+    widgets = list(_iter_child_widgets(view, 3))
+    assert len(widgets) == 1
+    _, btn = widgets[0]
+    assert isinstance(btn, QPushButton)
+    assert btn.text() == "What to do?"
+
+
+def test_warn_check_without_hint_gets_no_button(qapp) -> None:
+    """WARN rows with no registered hint key still get no button."""
+    view = _view_with_checks([
+        VerifyCheck(
+            bucket="universal",
+            name="completely-unknown-check-name-xyz",
+            status=CheckStatus.WARN,
+            message="some warning",
         ),
     ])
     widgets = list(_iter_child_widgets(view, 3))

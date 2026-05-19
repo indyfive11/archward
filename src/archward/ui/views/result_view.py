@@ -64,20 +64,26 @@ class ResultView(QWidget):
             for f in result.aur.failures:
                 lines.append(f"    - {f.package}")
         if result.aur and result.aur.quarantine:
-            active = [
-                (pkg, ver, status, fails, retry)
-                for pkg, ver, status, fails, retry in result.aur.quarantine.active
-                if status != "resolved"
-            ]
+            active = [e for e in result.aur.quarantine.active if e.status != "resolved"]
             if active:
                 lines.append(f"  AUR quarantine: {len(active)} package(s):")
-                for pkg, ver, status, fails, retry in active:
-                    retry_str = f" — retry {retry}" if retry else ""
-                    lines.append(f"    - {pkg} {ver} ({status}, {fails} failure(s){retry_str})")
+                for e in active:
+                    retry_str = f" — retry {e.retry_after}" if e.retry_after else ""
+                    lines.append(
+                        f"    - {e.package} {e.version}"
+                        f" ({e.status}, {e.failure_count} failure(s){retry_str})"
+                    )
+                    if e.last_error:
+                        lines.append(f"      reason: {e.last_error}")
                 lines.append("    (see Preferences → AUR or `archward aur quarantine list`)")
         if result.summary.reboot_needed:
             lines.append("")
             lines.append("ACTION: Reboot to activate the new kernel.")
+
+        if result.snapshot_id:
+            lines.append("")
+            lines.append(f"Rollback point: {result.snapshot_id}")
+            lines.append("  Use Snapshot Browser (Ctrl+B) or `archward rollback` if something breaks.")
 
         self._details.setText("\n".join(lines) or "All checks passed.")
 

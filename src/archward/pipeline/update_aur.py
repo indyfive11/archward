@@ -23,7 +23,7 @@ from typing import Protocol
 from archward.aur.helper import AurHelper, discover
 from archward.aur.quarantine import AurQuarantine, QuarantineAction, _classify_error
 from archward.events import EventBus
-from archward.models.aur import AurResult, BuildFailure, QuarantineSnapshot
+from archward.models.aur import AurResult, BuildFailure, QuarantineActiveEntry, QuarantineSnapshot
 from archward.models.config import ConfigModel
 from archward.pacman.runner import PromptProvider
 from archward.privilege.sudo import SudoStrategy
@@ -308,11 +308,18 @@ def _build_quarantine_snapshot(q: AurQuarantine) -> QuarantineSnapshot | None:
     active = q.active_entries()
     if not active:
         return None
-    rows: list[tuple[str, str, str, int, str | None]] = []
+    rows: list[QuarantineActiveEntry] = []
     for pkg, entry in active:
         retry_iso = (
             datetime.fromtimestamp(entry.retry_after, tz=timezone.utc).isoformat()
             if entry.retry_after is not None else None
         )
-        rows.append((pkg, entry.version, entry.status, entry.failure_count, retry_iso))
+        rows.append(QuarantineActiveEntry(
+            package=pkg,
+            version=entry.version,
+            status=entry.status,
+            failure_count=entry.failure_count,
+            retry_after=retry_iso,
+            last_error=entry.last_error[:80] if entry.last_error else None,
+        ))
     return QuarantineSnapshot(active=tuple(rows))

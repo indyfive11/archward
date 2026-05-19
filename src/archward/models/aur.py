@@ -16,17 +16,30 @@ class BuildFailure(BaseModel):
     last_lines: tuple[str, ...]
 
 
+class QuarantineActiveEntry(BaseModel):
+    """One active quarantine entry carried to the result view."""
+
+    model_config = ConfigDict(frozen=True)
+
+    package: str
+    version: str
+    status: str
+    failure_count: int
+    retry_after: str | None
+    last_error: str | None  # first 80 chars of the build error, for quick diagnosis
+
+
 class QuarantineSnapshot(BaseModel):
     """Read-only snapshot of quarantine state for the result view.
 
     Populated by the AUR phase after save(); carries only what the result
-    view needs — active entries (counting + quarantined) and their retry dates.
+    view needs — active entries (counting + quarantined), their retry dates,
+    and a short build-failure excerpt so users can tell upstream vs local issues.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    # list of (package, version, status, failure_count, retry_after_iso_or_none)
-    active: tuple[tuple[str, str, str, int, str | None], ...]
+    active: tuple[QuarantineActiveEntry, ...]
 
 
 class AurResult(BaseModel):
