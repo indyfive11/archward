@@ -385,6 +385,10 @@ class MainWindow(QMainWindow):
         self._reset_views()
         self._dry_btn.setEnabled(False)
         self._update_btn.setEnabled(False)
+        # _reset_views() hiding the result banner triggers a layout change that
+        # can blank the menu bar under Wayland's paint-pressure flushing. Force
+        # a repaint here so the menu bar doesn't start the run already blank.
+        self.menuBar().update()
         self._pending_mode = mode
 
         # v0.4.5 F4b: run warmup on a background QThread so the askpass dialog
@@ -613,6 +617,10 @@ class MainWindow(QMainWindow):
                 self._rail.select_phase("pacnew")
         self._result_banner.show_result(result)
         self._rail.mark_unstarted_skipped()
+        # Under Wayland, the menu bar can go blank during the run because Qt
+        # never re-issues a paint request for it on its own. Force a repaint
+        # so it's guaranteed to be visible after every pipeline completion.
+        self.menuBar().update()
         # Desktop notification on completion.
         notify.notify_completion(result, self.cfg)
 

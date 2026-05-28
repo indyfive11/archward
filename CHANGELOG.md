@@ -6,6 +6,19 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.13] — 2026-05-28
+
+### Fixed
+
+- **Menu bar Wayland repaint** — on Wayland (KDE Plasma 6), the "Tools" and
+  "Help" menu entries could go blank during a pipeline run and stay blank after
+  completion. The `QMenuBar` was the only major window widget with no code path
+  that triggered `update()`: toolbar buttons recovered when `setEnabled()` fired,
+  the phase rail recovered when `set_status()` fired, but the menu bar had no
+  equivalent. Fixed by adding `menuBar().update()` at run-start (where
+  `_reset_views()` hiding the result banner triggers a layout recalculation that
+  can flush the paint buffer) and again at pipeline completion.
+
 ## [0.4.12] — 2026-05-19
 
 **GUI communication improvements — closer alignment between what archward does and what it shows.**

@@ -66,7 +66,7 @@ PySide6 GUI (`archward-gui`).
    **orphaned packages** (WARN), **Arch Security Advisories** (FAIL on
    Critical/High; skipped if `arch-audit` present), opt-in
    `systemctl is-active` services list, optional reboot-recommended log.
-   Each FAIL row gets a "What to do?" button with a context-specific
+   Each FAIL and WARN row gets a "What to do?" button with a context-specific
    remediation hint.
 10. **Post-verify hooks** — run user-defined shell commands from
     `cfg.hooks.post_verify` (e.g. HTTP health probes, mountpoint checks,
@@ -390,12 +390,18 @@ The single-window GUI mirrors the CLI pipeline:
   archward instead of being kicked to a terminal. Pacnew table with
   per-row View Diff / Keep Ours / Take New / Edit buttons. Verify view
   grouped by bucket (universal · services · plugin · hooks) with a
-  "What to do?" remediation hint on every FAIL row. The view stays on
+  "What to do?" remediation hint on every FAIL and WARN row. The view stays on
   the last live phase after completion.
 - **Log pane** (bottom, collapsible) — full text of everything the pipeline
   emitted, dual-logged to `~/.local/state/archward/logs/archward.log`.
-- **Result strip** (bottom) — slim, color-coded banner showing the final
-  RESULT tag plus a compact one-liner of secondary signals.
+- **Result strip** (bottom) — slim, color-coded banner. A clean run shows
+  "Success"; if verify WARNs are present the label reads "Success  ▲ N
+  warnings" so the warn count is in the primary label rather than the
+  right-side detail. A clickable `"rollback: <snapshot-id> →"` chip appears
+  after every successful snapshot — clicking it opens the Snapshot Browser
+  pre-selected to that snapshot. The quarantine section shows a one-line build
+  failure reason under each quarantined AUR package so it is clear whether the
+  issue is upstream or local.
 - **Toolbar** — Run Dry-Run, Run Update, Snapshot Browser…, Preferences…,
   About (left-to-right). A "🛡 Archward _version_" brand cue anchors the
   left edge; the active distro name is shown beside it.
