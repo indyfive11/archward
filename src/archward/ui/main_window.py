@@ -23,7 +23,7 @@ import logging
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QThread, Signal
+from PySide6.QtCore import Qt, QSettings, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -342,6 +342,17 @@ class MainWindow(QMainWindow):
         _spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(_spacer)
 
+        self._toolbar = toolbar
+
+        # Wayland paint-buffer heartbeat: KWin can drop the compositor surfaces
+        # of widgets that haven't been repainted recently while another widget
+        # (the log pane) is generating continuous repaints. A 500 ms timer nudges
+        # every "quiet" chrome widget so the compositor keeps their surfaces alive.
+        # Started in _launch_pipeline(), stopped in _on_pipeline_done().
+        self._paint_heartbeat = QTimer(self)
+        self._paint_heartbeat.setInterval(500)
+        self._paint_heartbeat.timeout.connect(self._repaint_chrome)
+
         # Connect orphan CTA in the result banner to the manager dialog.
         self._result_banner.orphan_manage_requested.connect(self._open_orphan_manager)
         self._result_banner.rollback_requested.connect(self._on_rollback_requested)
@@ -385,10 +396,6 @@ class MainWindow(QMainWindow):
         self._reset_views()
         self._dry_btn.setEnabled(False)
         self._update_btn.setEnabled(False)
-        # _reset_views() hiding the result banner triggers a layout change that
-        # can blank the menu bar under Wayland's paint-pressure flushing. Force
-        # a repaint here so the menu bar doesn't start the run already blank.
-        self.menuBar().update()
         self._pending_mode = mode
 
         # v0.4.5 F4b: run warmup on a background QThread so the askpass dialog
@@ -438,6 +445,7 @@ class MainWindow(QMainWindow):
         )
         self.worker.finished_with_result.connect(self._on_pipeline_done)
         self.worker.start()
+        self._paint_heartbeat.start()
 
     def _reset_views(self) -> None:
         self._rail.reset()
@@ -617,12 +625,25 @@ class MainWindow(QMainWindow):
                 self._rail.select_phase("pacnew")
         self._result_banner.show_result(result)
         self._rail.mark_unstarted_skipped()
-        # Under Wayland, the menu bar can go blank during the run because Qt
-        # never re-issues a paint request for it on its own. Force a repaint
-        # so it's guaranteed to be visible after every pipeline completion.
-        self.menuBar().update()
+        self._paint_heartbeat.stop()
+        self._repaint_chrome()
         # Desktop notification on completion.
         notify.notify_completion(result, self.cfg)
+
+    def _repaint_chrome(self) -> None:
+        """Nudge every 'quiet' window widget to repaint.
+
+        Under Wayland (KWin), a widget whose paint buffer hasn't been committed
+        recently can be dropped from the compositor's surface tree while another
+        widget in the same window is generating continuous repaints (e.g. the log
+        pane during a pacman update). Calling update() marks each widget dirty so
+        Qt re-commits their surfaces on the next frame.
+        """
+        self.menuBar().update()
+        self._toolbar.update()
+        self._rail.update()
+        self._stack.currentWidget().update()
+        self._status.update()
 
     # ── Preferences ────────────────────────────────────────────────────────
 

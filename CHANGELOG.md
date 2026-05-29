@@ -6,6 +6,20 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.14] — 2026-05-29
+
+### Fixed
+
+- **Wayland widget blanking during long updates** — on Wayland (KDE Plasma 6),
+  KWin can drop the compositor surfaces of widgets that haven't been repainted
+  recently while another widget in the same window generates continuous repaints
+  (the log pane streaming pacman output). During a ~60 second `pacman -Syu` the
+  toolbar, menu bar, phase rail, and content area all went blank; only the log
+  pane survived because it was the only widget being continuously committed to
+  the compositor. Fixed with a 500 ms `QTimer` heartbeat that runs for the
+  duration of every pipeline execution and calls `update()` on all quiet chrome
+  widgets (`menuBar`, toolbar, phase rail, current stack page, status bar).
+
 ## [0.4.13] — 2026-05-28
 
 ### Fixed
