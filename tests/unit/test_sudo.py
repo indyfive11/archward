@@ -46,8 +46,10 @@ def test_discover_askpass_invalid_override_falls_back(monkeypatch, caplog) -> No
 
 
 def test_discover_askpass_full_failure_logs_error(monkeypatch, caplog) -> None:
-    """When both override AND auto-detect chain fail, an error is logged."""
+    """When override, auto-detect chain, and zenity all fail, an error is logged."""
     monkeypatch.setattr(sudo, "_ASKPASS_CANDIDATES", ("/nope/not/here",))
+    monkeypatch.setattr(sudo.shutil, "which", lambda _: None)  # suppress zenity fallback
+    monkeypatch.delenv("SUDO_ASKPASS", raising=False)
     with caplog.at_level(logging.ERROR, logger="archward.privilege.sudo"):
         result = sudo.discover_askpass("/another/nope")
     assert result is None

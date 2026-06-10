@@ -18,22 +18,45 @@ import os
 import shutil
 import subprocess
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Protocol
 
 log = logging.getLogger(__name__)
 
 _ASKPASS_CANDIDATES = (
-    "ksshaskpass",
-    "lxqt-openssh-askpass",
-    "ssh-askpass",
+    "ksshaskpass",                          # KDE
+    "gnome-ssh-askpass",                    # GNOME / GTK (openssh-askpass)
+    "lxqt-openssh-askpass",                 # LXQt
+    "ssh-askpass",                          # generic
+    "/usr/lib/openssh/gnome-ssh-askpass",   # Debian/Ubuntu path
     "/usr/lib/openssh/ssh-askpass",
     "/usr/lib/ssh/ssh-askpass",
     "x11-ssh-askpass",
 )
 
 
+def _create_zenity_wrapper() -> str | None:
+    """Write a zenity-based askpass wrapper to the archward data dir and return its path."""
+    zenity = shutil.which("zenity")
+    if not zenity:
+        return None
+    data_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "archward"
+    wrapper = data_dir / "askpass"
+    if not (wrapper.exists() and os.access(wrapper, os.X_OK)):
+        data_dir.mkdir(parents=True, exist_ok=True)
+        wrapper.write_text(f'#!/bin/sh\n{zenity} --password --title="${{1:-sudo: archward}}"\n')
+        wrapper.chmod(0o755)
+    return str(wrapper)
+
+
 def discover_askpass(override: str = "") -> str | None:
     """Return the first existing askpass binary path, or None if none found.
+
+    Detection order:
+    1. config override (if set and valid)
+    2. $SUDO_ASKPASS env var (set automatically by KDE and some DEs)
+    3. known native askpass programs (_ASKPASS_CANDIDATES)
+    4. zenity wrapper (generated on first use, covers fresh GTK installs)
 
     v0.4.1 (F11): when `override` is set but invalid, log a clear warning
     and FALL BACK to the auto-detection chain (rather than silently
@@ -51,18 +74,24 @@ def discover_askpass(override: str = "") -> str | None:
             "Configured askpass %r not found / not executable; "
             "falling back to auto-detection.", override,
         )
+    env_askpass = os.environ.get("SUDO_ASKPASS", "")
+    if env_askpass and os.access(env_askpass, os.X_OK):
+        return env_askpass
     for candidate in _ASKPASS_CANDIDATES:
         path = shutil.which(candidate)
         if path:
             return path
         if os.path.isabs(candidate) and os.access(candidate, os.X_OK):
             return candidate
-    if override:
-        log.error(
-            "No askpass binary available — sudo will block on TTY input. "
-            "Install one of %s, or configure NOPASSWD for pacman.",
-            ", ".join(_ASKPASS_CANDIDATES[:3]),
-        )
+    wrapper = _create_zenity_wrapper()
+    if wrapper:
+        log.info("No native askpass found; using zenity wrapper at %s", wrapper)
+        return wrapper
+    log.error(
+        "No askpass binary available — sudo will block on TTY input. "
+        "Install one of %s, or configure NOPASSWD for pacman.",
+        ", ".join(_ASKPASS_CANDIDATES[:3]),
+    )
     return None
 
 
