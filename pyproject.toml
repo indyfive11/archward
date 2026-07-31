@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 archward = "archward.cli:main"
+archward-askpass = "archward.privilege.askpass_qt:main"
 
 [project.gui-scripts]
 archward-gui = "archward.cli:main_gui"

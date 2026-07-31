@@ -17,6 +17,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Protocol
@@ -35,18 +36,17 @@ _ASKPASS_CANDIDATES = (
 )
 
 
-def _create_zenity_wrapper() -> str | None:
-    """Write a zenity-based askpass wrapper to the archward data dir and return its path."""
-    zenity = shutil.which("zenity")
-    if not zenity:
-        return None
-    data_dir = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "archward"
-    wrapper = data_dir / "askpass"
-    if not (wrapper.exists() and os.access(wrapper, os.X_OK)):
-        data_dir.mkdir(parents=True, exist_ok=True)
-        wrapper.write_text(f'#!/bin/sh\n{zenity} --password --title="${{1:-sudo: archward}}"\n')
-        wrapper.chmod(0o755)
-    return str(wrapper)
+def _bundled_askpass() -> str | None:
+    """Locate archward's own Qt askpass (`archward-askpass` console script).
+
+    Checked next to the running interpreter first so venv installs work even
+    when the venv's bin dir isn't on PATH (e.g. launched from a desktop file),
+    then on PATH for the normal packaged install (/usr/bin/archward-askpass).
+    """
+    sibling = Path(sys.executable).parent / "archward-askpass"
+    if sibling.is_file() and os.access(sibling, os.X_OK):
+        return str(sibling)
+    return shutil.which("archward-askpass")
 
 
 def discover_askpass(override: str = "") -> str | None:
@@ -56,7 +56,9 @@ def discover_askpass(override: str = "") -> str | None:
     1. config override (if set and valid)
     2. $SUDO_ASKPASS env var (set automatically by KDE and some DEs)
     3. known native askpass programs (_ASKPASS_CANDIDATES)
-    4. zenity wrapper (generated on first use, covers fresh GTK installs)
+    4. archward's bundled Qt askpass — always present on a packaged install,
+       so any desktop without a native askpass (Cinnamon, GNOME, Xfce, …)
+       still gets a working prompt with no extra packages
 
     v0.4.1 (F11): when `override` is set but invalid, log a clear warning
     and FALL BACK to the auto-detection chain (rather than silently
@@ -83,10 +85,10 @@ def discover_askpass(override: str = "") -> str | None:
             return path
         if os.path.isabs(candidate) and os.access(candidate, os.X_OK):
             return candidate
-    wrapper = _create_zenity_wrapper()
-    if wrapper:
-        log.info("No native askpass found; using zenity wrapper at %s", wrapper)
-        return wrapper
+    bundled = _bundled_askpass()
+    if bundled:
+        log.info("No native askpass found; using bundled Qt askpass at %s", bundled)
+        return bundled
     log.error(
         "No askpass binary available — sudo will block on TTY input. "
         "Install one of %s, or configure NOPASSWD for pacman.",

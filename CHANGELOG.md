@@ -6,6 +6,19 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fresh installs on desktops without a native askpass (Cinnamon, GNOME,
+  Xfce, …)** — archward previously found no askpass binary on non-KDE
+  desktops, leaving sudo to fail with "no askpass program specified" and the
+  update unable to authenticate. The askpass detection chain is now:
+  config override → `$SUDO_ASKPASS` from the desktop session → native askpass
+  programs (`ksshaskpass`, `gnome-ssh-askpass`, `lxqt-openssh-askpass`, …) →
+  archward's own bundled Qt password dialog (`archward-askpass`, new console
+  script). Because archward already depends on PySide6, the bundled fallback
+  guarantees a working password prompt on every graphical install with zero
+  additional dependencies. Headless/NOPASSWD behaviour is unchanged.
+
 ## [0.4.14] — 2026-05-29
 
 ### Fixed
