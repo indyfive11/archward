@@ -6,6 +6,8 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.15] — 2026-07-31
+
 ### Fixed
 
 - **Fresh installs on desktops without a native askpass (Cinnamon, GNOME,
