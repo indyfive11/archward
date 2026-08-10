@@ -4,7 +4,7 @@ All notable changes to **archward** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.18] — 2026-08-10
 
 ### Added — UX honesty
 
