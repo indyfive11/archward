@@ -9,13 +9,16 @@ Implements the audit's subprocess buffering recipe (A4):
 
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import pty
 import select
 import signal
 import subprocess
+import termios
 import threading
+import time
 from typing import Callable
 
 from archward.events import EventBus
@@ -79,8 +82,10 @@ def run_streaming(
     interactive prompts. Buffered partial lines are matched against
     `prompts.PROMPT_PATTERNS`; on a match, `prompt_provider(line, kind)` is
     invoked and its return string is written to the subprocess stdin. A
-    returned empty string signals cancellation — the subprocess group gets
-    SIGINT, which pacman handles cleanly between transactions (no DB damage).
+    returned empty string signals cancellation — ETX (Ctrl-C) is written to
+    the PTY so the line discipline delivers SIGINT to the child's foreground
+    process group (works even for root-owned sudo children), which pacman
+    handles cleanly between transactions (no DB damage).
     """
     full = [*strategy.argv_prefix(), *argv] if use_sudo else list(argv)
     env = c_locale_env(strategy.env())
@@ -144,21 +149,32 @@ def _run_pty(
     Layout:
       - pty.openpty() yields (master_fd, slave_fd).
       - Subprocess gets slave_fd as stdin/stdout/stderr and runs in its own
-        session (preexec_fn=os.setsid) so SIGINT can be sent to the process
-        group cleanly on user cancel.
+        session (preexec_fn=os.setsid) with the PTY as controlling terminal;
+        user cancel writes ETX to the master fd so the line discipline
+        raises SIGINT in the child's group (see _CancelLadder).
       - Reader loop: select on master_fd with _PROMPT_IDLE_S timeout. On
         data, accumulate into a line buffer; emit each complete line. On
         idle, check the buffer against PROMPT_PATTERNS; on match, invoke
         prompt_provider and write the response (or SIGINT on empty).
     """
     master_fd, slave_fd = pty.openpty()
+
+    def _child_setup() -> None:  # pragma: no cover — runs in the forked child
+        os.setsid()
+        # Make the PTY the child's controlling terminal so the line
+        # discipline delivers SIGINT to its (foreground) process group when
+        # ETX arrives on the master fd. A setsid'd child has no controlling
+        # terminal by default, which would leave Ctrl-C inert. fd 0 is the
+        # slave — subprocess dup2s the std fds before calling preexec_fn.
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
     try:
         proc = subprocess.Popen(
             full,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
-            preexec_fn=os.setsid,
+            preexec_fn=_child_setup,
             close_fds=True,
             env=env,
         )
@@ -175,12 +191,23 @@ def _run_pty(
     cancelled = False
     decoder_errors = "replace"
 
+    ladder = _CancelLadder(proc, master_fd, bus, phase)
+
     try:
         while True:
             try:
                 r, _, _ = select.select([master_fd], [], [], _PROMPT_IDLE_S)
             except (OSError, ValueError):
                 break
+
+            # External cancel (GUI Cancel button / window close). Checked on
+            # every tick — including while the child streams output — so the
+            # ladder starts promptly and keeps escalating on a stuck child.
+            if cancel_event is not None and cancel_event.is_set():
+                if not cancelled:
+                    bus.emit_log(phase, "(cancellation requested)")
+                    cancelled = True
+                ladder.escalate()
 
             if master_fd in r:
                 try:
@@ -194,18 +221,13 @@ def _run_pty(
                     line, buffer = buffer.split("\n", 1)
                     cleaned = strip_ansi(line.rstrip("\r"))
                     captured.append(cleaned)
-                    if cancel_event is not None and cancel_event.is_set():
-                        if not cancelled:
-                            bus.emit_log(phase, "(cancellation requested)")
-                            cancelled = True
-                    else:
+                    if not cancelled:
                         bus.emit_log(phase, cleaned)
             else:
                 # idle — partial-line buffer is the prompt candidate
-                if cancel_event is not None and cancel_event.is_set() and not cancelled:
-                    bus.emit_log(phase, "(cancellation requested)")
-                    cancelled = True
-                    _send_sigint(proc)
+                if cancelled:
+                    # Already interrupting; keep escalating, never re-prompt.
+                    ladder.escalate()
                     continue
                 if not buffer:
                     continue
@@ -221,11 +243,15 @@ def _run_pty(
                 except Exception:  # noqa: BLE001 — provider must never crash the runner
                     log.exception("prompt_provider raised; treating as cancel")
                     response = ""
-                buffer = ""
                 if response == "":
-                    bus.emit_log(phase, "(user cancelled at prompt — sending SIGINT)")
-                    _send_sigint(proc)
+                    # The buffer is deliberately NOT cleared: if the interrupt
+                    # doesn't take the child down, the pending prompt text must
+                    # stay visible to the final flush / post-mortem capture.
+                    bus.emit_log(phase, "(user cancelled at prompt — interrupting subprocess)")
+                    cancelled = True
+                    ladder.escalate()
                     continue
+                buffer = ""
                 payload = response if response.endswith("\n") else response + "\n"
                 try:
                     os.write(master_fd, payload.encode("utf-8"))
@@ -237,7 +263,7 @@ def _run_pty(
             cleaned = strip_ansi(buffer.rstrip("\r\n"))
             if cleaned:
                 captured.append(cleaned)
-                if not (cancel_event is not None and cancel_event.is_set()):
+                if not cancelled:
                     bus.emit_log(phase, cleaned)
     finally:
         try:
@@ -250,12 +276,67 @@ def _run_pty(
     return code, captured
 
 
-def _send_sigint(proc: subprocess.Popen) -> None:
-    """Best-effort SIGINT to the subprocess group; ignored if already gone."""
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-    except (ProcessLookupError, PermissionError):
-        pass
+# After the line-discipline interrupt, how long to wait for the child to exit
+# before escalating to SIGTERM on its process group.
+_CANCEL_TERM_GRACE_S = 10.0
+
+
+class _CancelLadder:
+    """Escalating cancel for the PTY child. `escalate()` is called on every
+    reader-loop tick once cancellation is requested; each stage fires once.
+
+    Stage 1 — write ETX (0x03) to the master fd. The PTY line discipline
+    delivers SIGINT to the child's foreground process group. Unlike
+    os.killpg, this works when the child runs as root (sudo pacman): the
+    kernel raises the signal, so there is no EPERM to swallow. pacman
+    handles SIGINT cleanly between transactions.
+
+    Stage 2 — if the child is still alive _CANCEL_TERM_GRACE_S later,
+    SIGTERM its process group. Effective for unprivileged helpers
+    (yay/paru); impossible for a root-owned group (EPERM), in which case
+    we keep waiting.
+
+    There is deliberately no SIGKILL stage: killing pacman mid-transaction
+    corrupts the package database. Worst case the child is left to finish.
+    """
+
+    def __init__(
+        self, proc: subprocess.Popen, master_fd: int, bus: EventBus, phase: str
+    ) -> None:
+        self._proc = proc
+        self._master_fd = master_fd
+        self._bus = bus
+        self._phase = phase
+        self._stage = 0
+        self._interrupted_at = 0.0
+
+    def escalate(self) -> None:
+        if self._stage == 0:
+            self._stage = 1
+            self._interrupted_at = time.monotonic()
+            self._bus.emit_log(
+                self._phase,
+                "(sending Ctrl-C — the subprocess aborts or finishes its current transaction)",
+            )
+            try:
+                os.write(self._master_fd, b"\x03")
+            except OSError:
+                pass
+        elif (
+            self._stage == 1
+            and time.monotonic() - self._interrupted_at >= _CANCEL_TERM_GRACE_S
+        ):
+            self._stage = 2
+            self._bus.emit_log(
+                self._phase,
+                f"(still running {int(_CANCEL_TERM_GRACE_S)}s after Ctrl-C — "
+                "sending SIGTERM to the process group)",
+            )
+            try:
+                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                # Root-owned group (sudo pacman) — cannot signal it; keep waiting.
+                pass
 
 
 def run_capture(

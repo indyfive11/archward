@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, QSettings, QThread, Signal
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
@@ -39,7 +39,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
-    QProgressDialog,
     QPushButton,
     QSplitter,
     QTreeWidget,
@@ -52,6 +51,11 @@ from archward.events import EventBus
 from archward.models.config import ConfigModel
 from archward.pacman import query as pq
 from archward.ui.grip_splitter import GripSplitter
+
+# The off-thread worker moved to archward.ui.off_thread (v0.4.17) so every
+# dialog that runs sudo subprocesses can share it. Aliases keep local names.
+from archward.ui.off_thread import FnWorker as _RollbackWorker
+from archward.ui.off_thread import run_off_thread as _shared_run_off_thread
 from archward.pipeline.rollback import (
     BOOT_CRITICAL,
     BulkResult,
@@ -101,31 +105,6 @@ def _read_first_line(path: Path) -> str:
         return ""
 
 
-class _RollbackWorker(QThread):
-    """Runs one rollback callable (restore_config or downgrade_package) off the
-    main thread so the GUI stays responsive while `pacman -U` or the file
-    operations finish. Emits the function's return value (a `RollbackResult`)
-    on completion.
-
-    Cancellation isn't supported — these operations are short (seconds) and
-    interrupting `pacman -U` mid-transaction is unsafe by the same logic
-    that keeps the main pipeline from killing pacman during updates.
-    """
-
-    finished_with_result = Signal(object)
-
-    def __init__(self, fn: Callable[[], object], parent=None) -> None:
-        super().__init__(parent)
-        self._fn = fn
-        self.result = None  # populated before the signal fires
-
-    def run(self) -> None:
-        try:
-            self.result = self._fn()
-        except Exception as e:  # noqa: BLE001 — must catch all so the QThread doesn't die silently
-            log.exception("rollback worker raised")
-            self.result = e
-        self.finished_with_result.emit(self.result)
 
 
 def _capture_status(snap_file: Path, live_path: Path) -> tuple[str, str]:
@@ -1138,27 +1117,29 @@ class SnapshotBrowser(QDialog):
             include_boot_critical = True
 
         # Auto-snapshot before bulk apply so rollback-of-rollback is possible.
-        self._log_action("taking pre-rollback snapshot")
-        try:
-            pre_snap = take_snapshot(self._cfg, self._strategy, self._bus or EventBus())
+        # Both the snapshot and the apply run inside the worker (v0.4.17):
+        # take_snapshot spawns sudo copies that can block on askpass, which
+        # used to freeze the GUI thread for multiple seconds here.
+        def _bulk_fn() -> object:
+            self._log_action("taking pre-rollback snapshot")
+            try:
+                pre_snap = take_snapshot(self._cfg, self._strategy, self._bus or EventBus())
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError(
+                    f"pre-rollback snapshot failed: {e} — aborting; "
+                    "bulk operations require an undo target"
+                ) from e
             self._log_action(f"pre-rollback snapshot at {pre_snap.meta.path}")
-        except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(
-                self,
-                "Pre-rollback snapshot failed",
-                f"Could not take a fresh snapshot before bulk apply:\n\n{e}\n\n"
-                "Aborting — bulk operations require an undo target.",
-            )
-            return
-
-        self._run_off_thread(
-            fn=lambda: apply_all_packages(
+            return apply_all_packages(
                 snap_path,
                 self._strategy,
                 kernel_patterns=tuple(self._cfg.risk.kernel_patterns),
                 kernel_pattern_exclude=tuple(self._cfg.risk.kernel_pattern_exclude),
                 include_boot_critical=include_boot_critical,
-            ),
+            )
+
+        self._run_off_thread(
+            fn=_bulk_fn,
             title="Apply all packages",
             progress_label=f"Running pacman -U on {len(changes)} package(s)…",
             on_done=lambda result: self._handle_bulk_done(
@@ -1204,32 +1185,13 @@ class SnapshotBrowser(QDialog):
         progress_label: str,
         on_done: Callable[[object], None],
     ) -> None:
-        """Run `fn` on a _RollbackWorker, show an indeterminate QProgressDialog
-        until it finishes, then dispatch the result to `on_done` on the main
-        thread.
+        """Delegates to the shared off-thread runner (archward.ui.off_thread).
 
-        Keeps the GUI responsive while pacman -U or the file ops run. The
-        progress dialog has no Cancel button — these operations should not
-        be interrupted mid-flight.
+        Keeps the GUI responsive while pacman -U or the file ops run.
         """
-        progress = QProgressDialog(progress_label, "", 0, 0, self)
-        progress.setWindowTitle(title)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.setCancelButton(None)
-        progress.setAutoClose(False)
-        progress.setAutoReset(False)
-        progress.show()
-
-        worker = _RollbackWorker(fn, parent=self)
-
-        def _on_finished(result: object) -> None:
-            progress.close()
-            on_done(result)
-            worker.deleteLater()
-
-        worker.finished_with_result.connect(_on_finished)
-        worker.start()
+        _shared_run_off_thread(
+            self, fn=fn, title=title, progress_label=progress_label, on_done=on_done
+        )
 
     # ── Helpers ────────────────────────────────────────────────────────────
 

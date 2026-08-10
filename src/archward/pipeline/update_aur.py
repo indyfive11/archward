@@ -222,6 +222,15 @@ def run_aur_update(
         for pkg, _old, _new in pending:
             if pkg in quarantine_ignored:
                 continue  # already handled
+            if cancel_event is not None and cancel_event.is_set():
+                bus.emit_log(PHASE, "Cancellation requested — aborting AUR phase.")
+                bus.emit_result(PHASE, "AUR phase aborted (cancelled)")
+                return AurResult(
+                    exit_code=130,
+                    failures=(),
+                    skipped=True,
+                    skip_reason="cancelled by user",
+                )
             if pkgbuild_reviewer.cancel_all_requested():
                 bus.emit_log(PHASE, "PKGBUILD review cancelled by user — aborting AUR phase.")
                 bus.emit_result(PHASE, "AUR phase aborted (user cancelled PKGBUILD review)")

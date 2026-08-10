@@ -556,6 +556,9 @@ def main(argv: list[str] | None = None) -> int:
             no_aur=args.no_aur,
             cancel_event=cancel_event,
             config_path=config_path,
+            # The CLI already holds the lock via acquire_lock() above,
+            # preserving its historical exit-code-3 contention behavior.
+            acquire_instance_lock=False,
         )
 
     # Final report.

@@ -27,6 +27,21 @@ def qapp():
     yield app
 
 
+@pytest.fixture
+def sync_off_thread(monkeypatch):
+    """Run the v0.4.17 off-thread apply path synchronously for determinism."""
+    import archward.ui.off_thread as ot
+
+    def _sync(parent, *, fn, title, progress_label, on_done):
+        try:
+            result = fn()
+        except Exception as e:  # noqa: BLE001
+            result = e
+        on_done(result)
+
+    monkeypatch.setattr(ot, "run_off_thread", _sync)
+
+
 def _balanced_policy() -> cp.CachePolicy:
     return cp.CachePolicy(
         timer_state="enabled",
@@ -76,7 +91,9 @@ def test_cache_tab_renders_dangerous_hook_warning(qapp, monkeypatch) -> None:
     assert "clean.hook" in texts
 
 
-def test_apply_preset_requires_confirmation_and_runs_commands(qapp, monkeypatch) -> None:
+def test_apply_preset_requires_confirmation_and_runs_commands(
+    qapp, monkeypatch, sync_off_thread
+) -> None:
     """Confirm dialog → Yes → tee (with input_text) + systemctl enable."""
     monkeypatch.setattr(cp, "detect_cache_policy", _balanced_policy)
     from archward.ui.dialogs import preferences as prefs
@@ -138,7 +155,9 @@ def test_apply_preset_aborts_on_no(qapp, monkeypatch) -> None:
     tab._apply_preset(home)  # should return without raising
 
 
-def test_mission_critical_disables_timer_via_apply(qapp, monkeypatch) -> None:
+def test_mission_critical_disables_timer_via_apply(
+    qapp, monkeypatch, sync_off_thread
+) -> None:
     monkeypatch.setattr(cp, "detect_cache_policy", _balanced_policy)
     from archward.ui.dialogs import preferences as prefs
     from archward.ui.dialogs.preferences import _CacheTab

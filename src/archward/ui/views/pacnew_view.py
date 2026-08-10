@@ -37,6 +37,7 @@ from archward.models.pacnew import PacnewAction, PacnewFile, PacnewRecommendatio
 from archward.pacman.pacnew import apply_action
 from archward.privilege.sudo import SudoStrategy
 from archward.ui.dialogs.diff_dialog import DiffDialog
+from archward.ui.off_thread import run_off_thread
 from archward.ui.persistent_state import load_column_widths, save_column_widths
 from archward.ui.theme import status_palette
 
@@ -179,13 +180,35 @@ class PacnewView(QWidget):
             self._missing_context()
             return
         self._log(f"applying {action.value} → {pacnew.path}")
-        try:
-            apply_action(pacnew, action, self._strategy)
-        except RuntimeError as e:
-            QMessageBox.critical(self, "Action failed", f"{action.value} on {pacnew.path}:\n\n{e}")
+        # Off-thread (v0.4.17): apply_action runs sudo rm/cp/mv — a cold sudo
+        # timestamp pops askpass, which used to block the GUI thread here.
+        self._set_row_buttons_enabled(item, False)
+        strategy = self._strategy
+        run_off_thread(
+            self,
+            fn=lambda: apply_action(pacnew, action, strategy),
+            title="Pacnew action",
+            progress_label=f"{action.value}: {pacnew.path}…",
+            on_done=lambda result: self._on_action_done(result, pacnew, action, item),
+        )
+
+    def _on_action_done(
+        self, result: object, pacnew: PacnewFile, action: PacnewAction, item: QTreeWidgetItem
+    ) -> None:
+        if isinstance(result, Exception):
+            QMessageBox.critical(
+                self, "Action failed", f"{action.value} on {pacnew.path}:\n\n{result}"
+            )
             self._mark_status(item, "FAILED", status_palette().fail_fg)
+            self._set_row_buttons_enabled(item, True)
             return
         self._mark_resolved(item, action)
+
+    def _set_row_buttons_enabled(self, item: QTreeWidgetItem, enabled: bool) -> None:
+        actions_widget = self._tree.itemWidget(item, 4)
+        if actions_widget is not None:
+            for b in actions_widget.findChildren(QPushButton):
+                b.setEnabled(enabled)
 
     def _on_edit(self, pacnew: PacnewFile, item: QTreeWidgetItem) -> None:
         """Spawn a graphical merge tool. After it exits the user is responsible for

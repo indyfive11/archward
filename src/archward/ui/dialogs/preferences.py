@@ -789,6 +789,7 @@ class _VerifyTab(_Tab):
 
     def __init__(self) -> None:
         super().__init__()
+        self._cfg: ConfigModel | None = None  # remembered by load() for sudo strategy
         self._enabled = QCheckBox("Enable verify phase")
         self._security_advisories = QCheckBox("Check Arch Security Advisories")
         self._stale_libs = QCheckBox("Detect stale library versions after update")
@@ -831,10 +832,17 @@ class _VerifyTab(_Tab):
                 f"Writes: {_STALE_LIBS_SUDOERS_PATH}"
             )
 
-    def _toggle_sudoers(self) -> None:
+    def _build_strategy(self):
         from archward.app import build_sudo_strategy
         from archward.config.loader import load_config
+
+        # v0.4.17: honor the profile being edited (previously always
+        # load_config() — i.e. the default profile's privilege settings).
+        return build_sudo_strategy(self._cfg if self._cfg is not None else load_config())
+
+    def _toggle_sudoers(self) -> None:
         from archward.pacman.runner import run_capture
+        from archward.ui.off_thread import run_off_thread
 
         if self._sudoers_active():
             confirm = QMessageBox.question(
@@ -848,17 +856,28 @@ class _VerifyTab(_Tab):
             )
             if confirm != QMessageBox.StandardButton.Yes:
                 return
-            strategy = build_sudo_strategy(load_config())
-            code, _out, err = run_capture(
-                ["rm", str(_STALE_LIBS_SUDOERS_PATH)], strategy=strategy,
-            )
-            if code != 0:
-                QMessageBox.critical(
-                    self, "Remove failed",
-                    f"Could not remove {_STALE_LIBS_SUDOERS_PATH}:\n{err.strip()}",
+            strategy = self._build_strategy()
+
+            def _remove() -> str:
+                code, _out, err = run_capture(
+                    ["rm", str(_STALE_LIBS_SUDOERS_PATH)], strategy=strategy,
                 )
-                return
-            QMessageBox.information(self, "Removed", "sudoers entry removed.")
+                if code != 0:
+                    raise RuntimeError(
+                        f"Could not remove {_STALE_LIBS_SUDOERS_PATH}:\n{err.strip()}"
+                    )
+                return "sudoers entry removed."
+
+            # Off-thread (v0.4.17): sudo can block on askpass; the GUI
+            # thread must stay free to show that dialog.
+            self._stale_libs_sudo_btn.setEnabled(False)
+            run_off_thread(
+                self,
+                fn=_remove,
+                title="Remove sudoers entry",
+                progress_label=f"Removing {_STALE_LIBS_SUDOERS_PATH}…",
+                on_done=self._on_sudoers_toggled,
+            )
         else:
             preview = (
                 "Enable full stale-library coverage?\n\n"
@@ -877,31 +896,46 @@ class _VerifyTab(_Tab):
                 QMessageBox.StandardButton.No,
             ) != QMessageBox.StandardButton.Yes:
                 return
-            strategy = build_sudo_strategy(load_config())
-            code, _out, err = run_capture(
-                ["tee", str(_STALE_LIBS_SUDOERS_PATH)],
-                strategy=strategy,
-                input_text=_STALE_LIBS_SUDOERS_LINE,
-            )
-            if code != 0:
-                QMessageBox.critical(
-                    self, "Write failed",
-                    f"Could not write {_STALE_LIBS_SUDOERS_PATH}:\n{err.strip()}",
+            strategy = self._build_strategy()
+
+            def _write() -> str:
+                code, _out, err = run_capture(
+                    ["tee", str(_STALE_LIBS_SUDOERS_PATH)],
+                    strategy=strategy,
+                    input_text=_STALE_LIBS_SUDOERS_LINE,
                 )
-                return
-            # Lock down permissions (sudoers.d files must be 0440)
-            run_capture(
-                ["chmod", "0440", str(_STALE_LIBS_SUDOERS_PATH)], strategy=strategy,
-            )
-            QMessageBox.information(
-                self, "Enabled",
-                "Full stale-library coverage enabled.\n"
-                f"sudoers entry written to {_STALE_LIBS_SUDOERS_PATH}.",
+                if code != 0:
+                    raise RuntimeError(
+                        f"Could not write {_STALE_LIBS_SUDOERS_PATH}:\n{err.strip()}"
+                    )
+                # Lock down permissions (sudoers.d files must be 0440)
+                run_capture(
+                    ["chmod", "0440", str(_STALE_LIBS_SUDOERS_PATH)], strategy=strategy,
+                )
+                return (
+                    "Full stale-library coverage enabled.\n"
+                    f"sudoers entry written to {_STALE_LIBS_SUDOERS_PATH}."
+                )
+
+            self._stale_libs_sudo_btn.setEnabled(False)
+            run_off_thread(
+                self,
+                fn=_write,
+                title="Enable full coverage",
+                progress_label=f"Writing {_STALE_LIBS_SUDOERS_PATH}…",
+                on_done=self._on_sudoers_toggled,
             )
 
+    def _on_sudoers_toggled(self, result: object) -> None:
+        self._stale_libs_sudo_btn.setEnabled(True)
+        if isinstance(result, Exception):
+            QMessageBox.critical(self, "sudoers update failed", str(result))
+        else:
+            QMessageBox.information(self, "Done", str(result))
         self._refresh_sudo_btn()
 
     def load(self, cfg: ConfigModel) -> None:
+        self._cfg = cfg
         self._enabled.setChecked(cfg.verify.enabled)
         self._security_advisories.setChecked(cfg.verify.security_advisories)
         self._stale_libs.setChecked(cfg.verify.stale_libs)
@@ -1263,31 +1297,48 @@ class _CacheTab(QWidget):
         ) != QMessageBox.StandardButton.Yes:
             return
 
-        strategy = build_sudo_strategy(self._cfg)
-        code, _out, err = run_capture(
-            ["tee", str(cp._CONF_D)], strategy=strategy, input_text=conf_content,
-        )
-        if code != 0:
-            QMessageBox.critical(
-                self, "Write failed",
-                f"Could not write /etc/conf.d/pacman-contrib:\n{err.strip()}",
-            )
-            return
+        from archward.ui.off_thread import run_off_thread
 
-        verb = ["enable", "--now"] if enable_timer else ["disable", "--now"]
-        code, _out, err = run_capture(
-            ["systemctl", *verb, "paccache.timer"], strategy=strategy,
+        strategy = build_sudo_strategy(self._cfg)
+
+        # Off-thread (v0.4.17): both sudo calls can block on askpass; the
+        # GUI thread must stay free to show that dialog.
+        def _apply() -> str:
+            code, _out, err = run_capture(
+                ["tee", str(cp._CONF_D)], strategy=strategy, input_text=conf_content,
+            )
+            if code != 0:
+                raise RuntimeError(
+                    f"Could not write /etc/conf.d/pacman-contrib:\n{err.strip()}"
+                )
+            verb = ["enable", "--now"] if enable_timer else ["disable", "--now"]
+            code, _out, err = run_capture(
+                ["systemctl", *verb, "paccache.timer"], strategy=strategy,
+            )
+            if code != 0:
+                return (
+                    "PARTIAL: PACCACHE_ARGS was written, but toggling "
+                    f"paccache.timer failed:\n{err.strip()}"
+                )
+            return f"Cache policy '{label}' applied."
+
+        run_off_thread(
+            self,
+            fn=_apply,
+            title="Apply cache policy",
+            progress_label=f"Applying '{label}'…",
+            on_done=self._on_policy_applied,
         )
-        if code != 0:
+
+    def _on_policy_applied(self, result: object) -> None:
+        if isinstance(result, Exception):
+            QMessageBox.critical(self, "Write failed", str(result))
+        elif isinstance(result, str) and result.startswith("PARTIAL: "):
             QMessageBox.warning(
-                self, "Timer toggle failed",
-                "PACCACHE_ARGS was written, but toggling paccache.timer "
-                f"failed:\n{err.strip()}",
+                self, "Timer toggle failed", result.removeprefix("PARTIAL: ")
             )
         else:
-            QMessageBox.information(
-                self, "Applied", f"Cache policy '{label}' applied.",
-            )
+            QMessageBox.information(self, "Applied", str(result))
         self._render()
 
     def _apply_preset(self, preset) -> None:
@@ -2008,7 +2059,22 @@ class PreferencesDialog(QDialog):
             )
             return
 
-        det = run_full_detection()
+        # Off-thread (v0.4.17): the full detection scan (systemctl queries,
+        # helper discovery) takes seconds and used to freeze the dialog.
+        from archward.ui.off_thread import run_off_thread
+
+        run_off_thread(
+            self,
+            fn=run_full_detection,
+            title="Re-detect",
+            progress_label="Scanning system (kernels, services, AUR helper)…",
+            on_done=lambda det: self._on_redetect_scanned(det, current),
+        )
+
+    def _on_redetect_scanned(self, det: object, current: ConfigModel) -> None:
+        if isinstance(det, Exception):
+            QMessageBox.critical(self, "Re-detect failed", str(det))
+            return
         diff = diff_against(current, det)
 
         if (

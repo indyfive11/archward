@@ -19,7 +19,6 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication,
     QButtonGroup,
     QDialog,
     QHBoxLayout,
@@ -193,12 +192,25 @@ class _DetectPage(_Page):
         self._skipped = False
 
     def _run_scan(self) -> None:
+        # Off-thread (v0.4.17): the scan takes seconds and used to freeze the
+        # wizard (a single processEvents() call notwithstanding).
+        from archward.ui.off_thread import FnWorker
+
         self._scan_btn.setEnabled(False)
         self._scan_btn.setText("Scanning…")
-        QApplication.processEvents()
-        self._det = run_full_detection()
+        self._scan_worker = FnWorker(run_full_detection, parent=self)
+        self._scan_worker.finished_with_result.connect(self._on_scan_done)
+        self._scan_worker.start()
+
+    def _on_scan_done(self, result: object) -> None:
+        self._scan_worker.deleteLater()
         self._scan_btn.setText("Scan now")
         self._scan_btn.setEnabled(True)
+        if isinstance(result, Exception):
+            self._result_lbl.setText(f"Detection failed: {result}")
+            self._result_lbl.show()
+            return
+        self._det = result
         self._skipped = False
 
         kernels_str = ", ".join(self._det.kernels) if self._det.kernels else "(none)"

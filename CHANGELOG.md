@@ -6,6 +6,75 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+### Added — cancel & lifecycle
+
+- **Cancel button in the toolbar** — a running update can finally be
+  cancelled from the GUI (previously the only "cancel" was closing the
+  window). The copy is honest about semantics: the package transaction
+  currently running is allowed to finish — interrupting pacman
+  mid-transaction risks database corruption — and all remaining phases are
+  skipped. Cancelling during authentication drops the pending launch before
+  anything runs.
+- **Cancellation is honored at every phase boundary** — a cancel that
+  arrived while pacman ran no longer launches the AUR helper (with its new
+  sudo escalations), pacnew scan, verify, or hooks afterwards; the run
+  reports "cancelled by user". The PKGBUILD review loop also checks for
+  cancellation between packages.
+- **Interactive-update cancel actually interrupts pacman** — cancel used to
+  send SIGINT via `os.killpg`, which silently fails with EPERM against the
+  root-owned `sudo pacman` process group; the prompt buffer was also cleared,
+  so a cancel at a `[Y/n]` prompt left pacman waiting forever on a prompt
+  archward could no longer see. Cancel now writes Ctrl-C (ETX) to the PTY —
+  the kernel's line discipline delivers SIGINT to the child regardless of
+  privilege, exactly like a real terminal — with an escalation to SIGTERM
+  after 10 s for children that ignore SIGINT (never SIGKILL: a killed
+  mid-transaction pacman corrupts the package database). The PTY is now the
+  child's controlling terminal, which the old `setsid`-only setup never
+  established.
+- **Single-instance lock covers the GUI** — only the CLI took the instance
+  lock; a GUI run could race a concurrent `archward` CLI update (two
+  `pacman -Syu` processes). The lock now lives inside `run_pipeline`, so
+  every front-end is covered; a second instance refuses to start with a
+  clear message instead of racing.
+
+### Fixed — GUI crash/hang class
+
+- **Closing the window during a PKGBUILD review or gate-override prompt no
+  longer aborts the app** — both dialogs used a blocking cross-thread
+  connection the closing main thread could never service; the pipeline
+  thread deadlocked and Qt aborted the process ("QThread destroyed while
+  running"). All prompters now share one cancellable wait contract, and
+  window close force-cancels every pending prompt (HIGH-risk decision, gate
+  override, pacman/AUR prompt, PKGBUILD review) so the worker exits cleanly.
+- **Closing the window mid-transaction defers instead of crashing** — if the
+  pipeline is still finishing its current transaction after cancellation,
+  the window stays open with a status message and closes itself when the
+  run completes, rather than destroying a running worker thread.
+- **Closing during sudo authentication no longer risks an abort** — warmup
+  runs on a daemon thread now; a close while the askpass dialog is open
+  simply exits.
+- **Double-launch race fixed** — pressing F5 in the gap between
+  authentication finishing and the pipeline starting could launch two
+  concurrent `sudo pacman -Syu` runs. A single run-state machine
+  (idle/authenticating/running) now guards every entry point, including the
+  keyboard shortcuts, Preferences, Snapshot Browser, and profile switching
+  (previously openable during the authentication gap).
+- **Idle repaint timer leak** — if the pipeline raised, the 2 Hz
+  Wayland-repaint heartbeat kept running forever; it now stops on every
+  completion path. Per-run worker threads and event bridges are also
+  released after each run instead of accumulating on the window.
+- **GUI no longer freezes on privileged or slow actions** — pacnew row
+  actions (Keep Ours / Take New), the diff viewer's root-file fallback
+  (`sudo cat`), the Verify tab's sudoers toggle, the Cache tab's policy
+  apply, the Preferences re-detect scan, the wizard's system scan, and the
+  bulk-rollback pre-snapshot all ran sudo or multi-second work directly on
+  the GUI thread — a cold sudo timestamp popped askpass while the event
+  loop (and thus the askpass dialog itself) was frozen. All of them now run
+  on a shared off-thread runner with a progress dialog.
+- **Verify tab's sudoers toggle honors the active profile** — it built its
+  sudo strategy from the default config, ignoring the profile being edited
+  (wrong askpass settings on non-default profiles).
+
 ### Fixed — the "Truth" patch: things archward reported wrongly
 
 - **Phase rail showed the verify phase red on every run** — the rail status

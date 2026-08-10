@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from archward.pacman.runner import run_capture
 from archward.privilege.sudo import SudoStrategy
+from archward.ui.off_thread import FnWorker
 from archward.ui.theme import status_palette
 
 log = logging.getLogger(__name__)
@@ -125,13 +126,13 @@ class DiffDialog(QDialog):
         self._view.setFont(mono)
         self._highlighter = _DiffHighlighter(self._view.document())
 
-        diff_text, err = render_diff(orig, new, strategy)
-        if err:
-            self._view.setPlainText(f"(error rendering diff)\n\n{err}")
-        elif not diff_text.strip():
-            self._view.setPlainText("(files are identical — pacman wrote a .pacnew but content matches)")
-        else:
-            self._view.setPlainText(diff_text)
+        # Off-thread (v0.4.17): render_diff may fall back to `sudo cat` for
+        # root-only files; a cold sudo timestamp pops askpass, which used to
+        # block the GUI thread inside this constructor.
+        self._view.setPlainText("(reading files…)")
+        self._worker = FnWorker(lambda: render_diff(orig, new, strategy), parent=self)
+        self._worker.finished_with_result.connect(self._on_diff_ready)
+        self._worker.start()
 
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close.rejected.connect(self.reject)
@@ -141,6 +142,19 @@ class DiffDialog(QDialog):
         layout.addWidget(header)
         layout.addWidget(self._view, stretch=1)
         layout.addWidget(close)
+
+    def _on_diff_ready(self, result: object) -> None:
+        self._worker.deleteLater()
+        if isinstance(result, Exception):
+            self._view.setPlainText(f"(error rendering diff)\n\n{result}")
+            return
+        diff_text, err = result
+        if err:
+            self._view.setPlainText(f"(error rendering diff)\n\n{err}")
+        elif not diff_text.strip():
+            self._view.setPlainText("(files are identical — pacman wrote a .pacnew but content matches)")
+        else:
+            self._view.setPlainText(diff_text)
 
 
 class TextDiffDialog(QDialog):

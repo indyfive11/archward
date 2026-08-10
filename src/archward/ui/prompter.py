@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot
 from PySide6.QtWidgets import QMessageBox
 
 from archward.aur.metadata import AurPackageInfo, fetch_aur_info
@@ -43,23 +43,21 @@ from archward.ui.views.update_view import UpdateView
 log = logging.getLogger(__name__)
 
 
-class _AnswerHolder:
-    """Mutable result container for the gate-override blocking call."""
-
-    def __init__(self) -> None:
-        self.answer: bool = False
-
-
 class GuiPrompter(QObject):
     """Lives on the main thread; routes prompts through inline view interactions
-    or QMessageBox modals as appropriate."""
+    or QMessageBox modals as appropriate.
+
+    Cancellation contract (v0.4.17): every worker-thread blocking call waits
+    on a threading.Event that `cancel_pending()` can set with a safe "No"
+    answer — never a BlockingQueuedConnection, whose delivery a closing main
+    thread cannot guarantee (destroyed-running-QThread abort)."""
 
     # Signal emitted from worker thread → cross-thread auto-becomes
     # QueuedConnection delivery to enable_decision on the main thread.
     _enable_risk_decision = Signal(str)
 
-    # Gate override is still a modal — same blocking-queued pattern as before.
-    _gate_override_requested = Signal(object, object)  # (gate, holder)
+    # Gate override modal request; queued delivery, answered via _gate_event.
+    _gate_override_requested = Signal(object)  # (gate,)
 
     def __init__(self, risk_view: RiskView, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -68,6 +66,9 @@ class GuiPrompter(QObject):
         # the RiskView's `decision_made` signal handler sets the answer + event.
         self._decision_event = threading.Event()
         self._decision_answer: tuple[bool, list[str]] = (False, [])
+        # confirm_gate_override synchronization — same Event pattern.
+        self._gate_event = threading.Event()
+        self._gate_answer: bool = False
 
         # Cross-thread activation of the Risk view buttons. Worker emits;
         # Qt's auto-connection rules deliver via QueuedConnection because
@@ -79,11 +80,8 @@ class GuiPrompter(QObject):
         # GuiPrompter also lives on the main thread.
         self._risk_view.decision_made.connect(self._on_decision)
 
-        # Gate override stays a modal.
-        self._gate_override_requested.connect(
-            self._on_gate_override_main_thread,
-            Qt.ConnectionType.BlockingQueuedConnection,
-        )
+        # Gate override modal — queued (never blocking-queued) delivery.
+        self._gate_override_requested.connect(self._on_gate_override_main_thread)
 
     # ── Pipeline-facing API (called on worker thread) ──────────────────────
 
@@ -116,18 +114,25 @@ class GuiPrompter(QObject):
     def confirm_gate_override(self, gate: GateResult) -> bool:
         if threading.current_thread() is threading.main_thread():
             return self._show_gate_dialog(gate)
-        holder = _AnswerHolder()
-        self._gate_override_requested.emit(gate, holder)
-        return holder.answer
+        self._gate_event.clear()
+        self._gate_answer = False
+        self._gate_override_requested.emit(gate)
+        self._gate_event.wait()
+        return self._gate_answer
 
-    def cancel_pending_decision(self) -> None:
-        """Force any in-flight decide_high_risk to return (False, []).
+    def cancel_pending(self) -> None:
+        """Unblock any in-flight worker-thread wait with a safe 'No' answer.
 
-        Called from MainWindow.closeEvent so the worker doesn't hang waiting
-        on user input the user can no longer give.
+        Called from MainWindow (closeEvent / Cancel button) so the worker
+        doesn't hang waiting on user input the user can no longer give.
         """
         self._decision_answer = (False, [])
         self._decision_event.set()
+        self._gate_answer = False
+        self._gate_event.set()
+
+    # Backwards-compatible alias (pre-v0.4.17 name).
+    cancel_pending_decision = cancel_pending
 
     # ── Main-thread slots ──────────────────────────────────────────────────
 
@@ -137,11 +142,11 @@ class GuiPrompter(QObject):
         self._decision_answer = (proceed, list(ignored))
         self._decision_event.set()
 
-    @Slot(object, object)
-    def _on_gate_override_main_thread(
-        self, gate: GateResult, holder: _AnswerHolder
-    ) -> None:
-        holder.answer = self._show_gate_dialog(gate)
+    @Slot(object)
+    def _on_gate_override_main_thread(self, gate: GateResult) -> None:
+        answer = self._show_gate_dialog(gate)
+        self._gate_answer = answer
+        self._gate_event.set()
 
     # ── Fallback dialog (main-thread caller) ───────────────────────────────
 
@@ -237,24 +242,20 @@ class UpdatePrompter(QObject):
         self._event.set()
 
 
-class _PkgbuildAnswerHolder:
-    """Mutable container for PkgbuildPrompter's BlockingQueuedConnection result."""
-
-    def __init__(self) -> None:
-        self.result: PkgbuildReviewResult = PkgbuildReviewResult.CANCEL_ALL
-
-
 class PkgbuildPrompter(QObject):
     """Bridges the worker-thread AUR phase to the main-thread PKGBUILD review modal.
 
     For each AUR-pending package, the worker calls `review(pkg)`. We fetch the
     PKGBUILD content on the worker thread (network call, keeps the GUI
-    responsive), then hop to the main thread for the modal via a
-    BlockingQueuedConnection, then return the boolean approval to the worker.
+    responsive), request the modal via a queued signal, and block on a
+    threading.Event until the modal's verdict arrives — the same cancellable
+    pattern as GuiPrompter/UpdatePrompter. `cancel_pending()` (window close /
+    Cancel button) unblocks an in-flight review with CANCEL_ALL so the worker
+    thread can exit instead of deadlocking on a modal that will never run.
     CANCEL_ALL short-circuits the rest of the loop in the caller.
     """
 
-    _show_modal_requested = Signal(object, object, object)  # (pkg, content, holder)
+    _show_modal_requested = Signal(object, object)  # (pkg, content)
 
     def __init__(self, main_window: QObject) -> None:
         super().__init__(main_window)
@@ -264,10 +265,9 @@ class PkgbuildPrompter(QObject):
         self._pending_previous: str | None = None
         self._pending_previous_at: float | None = None
         self._pending_aur_info: AurPackageInfo | None = None
-        self._show_modal_requested.connect(
-            self._on_show_modal,
-            Qt.ConnectionType.BlockingQueuedConnection,
-        )
+        self._modal_event = threading.Event()
+        self._modal_result: PkgbuildReviewResult = PkgbuildReviewResult.CANCEL_ALL
+        self._show_modal_requested.connect(self._on_show_modal)
 
     def reset(self) -> None:
         """Call before each AUR phase so a prior CANCEL_ALL doesn't leak."""
@@ -295,10 +295,14 @@ class PkgbuildPrompter(QObject):
         # Loop on RETRY (re-fetch the PKGBUILD) until the modal returns a
         # terminal verdict.
         while True:
+            if self._cancel_all:
+                return False
             content = fetch_pkgbuild(pkg)
-            holder = _PkgbuildAnswerHolder()
-            self._show_modal_requested.emit(pkg, content, holder)
-            verdict = holder.result
+            self._modal_event.clear()
+            self._modal_result = PkgbuildReviewResult.CANCEL_ALL
+            self._show_modal_requested.emit(pkg, content)
+            self._modal_event.wait()
+            verdict = self._modal_result
             if verdict is PkgbuildReviewResult.APPROVE:
                 if content is not None:
                     self._pkgbuild_cache.store(pkg, content)
@@ -314,9 +318,20 @@ class PkgbuildPrompter(QObject):
     def cancel_all_requested(self) -> bool:
         return self._cancel_all
 
-    @Slot(object, object, object)
-    def _on_show_modal(self, pkg: str, content: str | None, holder) -> None:
-        """Main-thread slot. Show modal, write the result enum into holder."""
+    def cancel_pending(self) -> None:
+        """Unblock an in-flight review() with CANCEL_ALL. Called from
+        MainWindow (closeEvent / Cancel button) on the main thread."""
+        self._cancel_all = True
+        self._modal_result = PkgbuildReviewResult.CANCEL_ALL
+        self._modal_event.set()
+
+    @Slot(object, object)
+    def _on_show_modal(self, pkg: str, content: str | None) -> None:
+        """Main-thread slot. Show modal, publish the verdict to the worker."""
+        if self._cancel_all:
+            # Cancelled while this request sat in the queue — don't show a
+            # modal the user no longer wants; the worker is already unblocked.
+            return
         dlg = PkgbuildReviewDialog(
             pkg, content,
             previous_content=self._pending_previous,
@@ -324,4 +339,5 @@ class PkgbuildPrompter(QObject):
             aur_info=self._pending_aur_info,
             parent=self._main_window,
         )
-        holder.result = dlg.review()
+        self._modal_result = dlg.review()
+        self._modal_event.set()

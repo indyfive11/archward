@@ -117,12 +117,94 @@ def run_pipeline(
     config_path: Path | None = None,
     prompt_provider: PromptProvider | None = None,
     pkgbuild_reviewer: PkgbuildReviewer | None = None,
+    acquire_instance_lock: bool = True,
 ) -> PipelineResult:
-    """Run the full pipeline. Never raises on update failure — see PipelineResult."""
+    """Run the full pipeline. Never raises on update failure — see PipelineResult.
+
+    `acquire_instance_lock` (v0.4.17): run_pipeline itself takes the
+    single-instance lock so every front-end is covered — previously only the
+    CLI locked and a GUI run could race a concurrent CLI update. The CLI
+    passes False because it already holds the lock (its wrapper preserves
+    the historical exit-code-3 contention behavior).
+    """
+    if not acquire_instance_lock:
+        return _run_pipeline_impl(
+            cfg, strategy, bus, mode,
+            auto_yes=auto_yes, no_aur=no_aur, cancel_event=cancel_event,
+            prompter=prompter, config_path=config_path,
+            prompt_provider=prompt_provider, pkgbuild_reviewer=pkgbuild_reviewer,
+        )
+
+    from archward.app import try_acquire_lock  # composition root; no import cycle
+
+    with try_acquire_lock() as acquired:
+        if not acquired:
+            result = PipelineResult()
+            bus.emit_start("preflight", "Pre-flight")
+            bus.emit_log(
+                "preflight",
+                "FAIL: another archward instance is running (instance lock held) "
+                "— refusing to start.",
+            )
+            bus.emit_result("preflight", "FAIL: another archward instance is running")
+            result.preflight_failed = True
+            result.aborted_reason = "another archward instance is running"
+            result.summary = derive_result(
+                preflight_failed=True,
+                update_exit_code=None,
+                pending=[],
+                verify=None,
+                pacnew_count=0,
+                was_dry_run=(mode is Mode.DRY_RUN),
+            )
+            return result
+        return _run_pipeline_impl(
+            cfg, strategy, bus, mode,
+            auto_yes=auto_yes, no_aur=no_aur, cancel_event=cancel_event,
+            prompter=prompter, config_path=config_path,
+            prompt_provider=prompt_provider, pkgbuild_reviewer=pkgbuild_reviewer,
+        )
+
+
+def _run_pipeline_impl(
+    cfg: ConfigModel,
+    strategy: SudoStrategy,
+    bus: EventBus,
+    mode: Mode,
+    *,
+    auto_yes: bool = False,
+    no_aur: bool = False,
+    cancel_event: threading.Event | None = None,
+    prompter: Prompter | None = None,
+    config_path: Path | None = None,
+    prompt_provider: PromptProvider | None = None,
+    pkgbuild_reviewer: PkgbuildReviewer | None = None,
+) -> PipelineResult:
     result = PipelineResult()
     hooks = HookRunner(cfg.hooks, bus)
     if prompter is None:
         prompter = _default_prompter(mode, auto_yes)
+
+    def _cancelled() -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
+    def _cancel_abort() -> PipelineResult:
+        """Short-circuit at a phase boundary after the user cancelled.
+
+        The subprocess of the phase that was running was allowed to finish
+        (never killed mid-transaction); everything after it is skipped.
+        """
+        bus.emit_log("pipeline", "Cancelled by user — skipping remaining phases.")
+        result.aborted_reason = "cancelled by user"
+        result.summary = derive_result(
+            preflight_failed=True,
+            update_exit_code=result.update_exit_code,
+            pending=result.pending,
+            verify=None,
+            pacnew_count=result.pacnew_count,
+            was_dry_run=(mode is Mode.DRY_RUN),
+        )
+        return result
 
     # ── Pre-flight ──────────────────────────────────────────────────────────
     preflight = gates_phase.preflight_checks(cfg, bus)
@@ -168,6 +250,8 @@ def run_pipeline(
     # ── Snapshot ────────────────────────────────────────────────────────────
     snapshot = snapshot_phase.take_snapshot(cfg, strategy, bus)
     result.snapshot_id = snapshot.meta.snapshot_id
+    if _cancelled():
+        return _cancel_abort()
 
     # ── Gates ───────────────────────────────────────────────────────────────
     gate_results = gates_phase.run_gates(cfg, snapshot, bus)
@@ -185,6 +269,9 @@ def run_pipeline(
                 pacnew_count=0,
             )
             return result
+
+    if _cancelled():
+        return _cancel_abort()
 
     # ── Risk + transaction preview ──────────────────────────────────────────
     risk_outcome = risk_phase.classify_pending(cfg, bus)
@@ -286,6 +373,9 @@ def run_pipeline(
                 )
                 result.deselected_packages = tuple(ignored)
 
+    if _cancelled():
+        return _cancel_abort()
+
     # ── Pre-update hooks ────────────────────────────────────────────────────
     pre_outcome = hooks.run_pre_update(None)
     result.pre_hook_results = tuple(pre_outcome.results)
@@ -319,6 +409,12 @@ def run_pipeline(
             )
             return result
 
+    # A cancel that arrived while pacman was running (the subprocess is
+    # allowed to finish its transaction) must not launch the AUR helper,
+    # pacnew scan, verify, or hooks — new sudo escalations included.
+    if _cancelled():
+        return _cancel_abort()
+
     # ── Update AUR ──────────────────────────────────────────────────────────
     result.aur = update_aur.run_aur_update(
         cfg, strategy, bus,
@@ -328,9 +424,15 @@ def run_pipeline(
         pkgbuild_reviewer=pkgbuild_reviewer,
     )
 
+    if _cancelled():
+        return _cancel_abort()
+
     # ── Pacnew scan ─────────────────────────────────────────────────────────
     pacnew_files = pacnew_phase.scan_pacnew(cfg, snapshot.meta.path, bus)
     result.pacnew_count = len(pacnew_files)
+
+    if _cancelled():
+        return _cancel_abort()
 
     # ── Verify ──────────────────────────────────────────────────────────────
     if cfg.verify.enabled:

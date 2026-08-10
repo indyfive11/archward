@@ -75,41 +75,61 @@ def check_distro_or_exit(bus: EventBus) -> None:
 
 
 @contextmanager
-def acquire_lock() -> Iterator[None]:
-    """Acquire ~/.local/state/archward/archward.lock; raise if another instance holds it.
+def try_acquire_lock() -> Iterator[bool]:
+    """Try to acquire ~/.local/state/archward/archward.lock without exiting.
 
-    Phase 1 uses a simple advisory flock — Qt's QLockFile (planned for the GUI
-    in Phase 4) provides cross-process detection with stale handling, but for
-    CLI-only Phase 1 a basic POSIX flock is sufficient.
+    Yields True when the lock was acquired (released on context exit) or
+    False when another instance holds it. This is the primitive run_pipeline
+    uses (v0.4.17) so BOTH front-ends are covered — previously only the CLI
+    locked, and a GUI run could race a concurrent CLI `archward` update.
     """
     import fcntl
+    import os
 
     paths.state_dir().mkdir(parents=True, exist_ok=True)
     lock_path = paths.lock_file()
     fd = open(lock_path, "w", encoding="utf-8")
+    acquired = False
     try:
         try:
             fcntl.flock(fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
         except OSError:
+            pass
+        if acquired:
+            fd.write(str(os.getpid()) + "\n")
+            fd.flush()
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        fd.close()
+        if acquired:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
+
+@contextmanager
+def acquire_lock() -> Iterator[None]:
+    """CLI-facing wrapper around try_acquire_lock(): exits 3 on contention.
+
+    Phase 1 used a simple advisory flock; the primitive now lives in
+    try_acquire_lock() so run_pipeline can share it without the sys.exit.
+    """
+    with try_acquire_lock() as acquired:
+        if not acquired:
             print(
-                f"Another archward instance is running (lock: {lock_path}). Refusing to start.",
+                f"Another archward instance is running (lock: {paths.lock_file()}). Refusing to start.",
                 file=sys.stderr,
             )
             print("RESULT:UPDATE_FAILED", flush=True)
             sys.exit(3)
-        fd.write(str(__import__("os").getpid()) + "\n")
-        fd.flush()
         yield
-    finally:
-        try:
-            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-        except OSError:
-            pass
-        fd.close()
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
 
 
 def setup_app(

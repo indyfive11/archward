@@ -22,9 +22,10 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from enum import Enum
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QSettings, QThread, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -105,13 +106,30 @@ def _classify_result_message(message: str) -> str:
     return "pass"
 
 
-class WarmupWorker(QThread):
+class RunState(Enum):
+    """Single source of truth for the window's run lifecycle (v0.4.17).
+
+    All entry points (Run buttons, F5/Ctrl+D shortcuts, Preferences,
+    Snapshot Browser, profile switch) consult this instead of poking at
+    individual worker.isRunning() flags — closing the warmup-gap race where
+    a second launch slipped in between warmup_done emission and delivery.
+    """
+
+    IDLE = "idle"
+    WARMUP = "warmup"
+    RUNNING = "running"
+
+
+class WarmupWorker(QObject):
     """Runs strategy.warmup() off the Qt main thread (v0.4.5 F4b).
 
-    The askpass dialog (ksshaskpass) blocks until the user responds. Running
-    it on the main thread freezes the event loop, preventing status-bar repaints
-    and any other UI activity. Moving warmup to a daemon QThread keeps the UI
-    alive while the dialog is open.
+    The askpass dialog (ksshaskpass) blocks until the user responds; running
+    warmup on the main thread would freeze the event loop. Since v0.4.17 the
+    work runs on a *daemon* threading.Thread rather than a QThread: warmup
+    cannot be interrupted (it sits inside `sudo -A -v`), and closing the
+    window while a QThread ran meant a destroyed-running-QThread abort. A
+    daemon thread simply dies with the process; a leftover askpass dialog
+    exits when dismissed.
     """
 
     warmup_done = Signal(bool)  # True = success, False = failure
@@ -119,14 +137,34 @@ class WarmupWorker(QThread):
     def __init__(self, strategy: SudoStrategy, parent=None) -> None:
         super().__init__(parent)
         self.strategy = strategy
+        self._thread: threading.Thread | None = None
 
-    def run(self) -> None:
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._run, name="archward-sudo-warmup", daemon=True
+        )
+        self._thread.start()
+
+    def isRunning(self) -> bool:  # noqa: N802 — QThread-compatible interface
+        return self._thread is not None and self._thread.is_alive()
+
+    def wait(self, msecs: int | None = None) -> bool:
+        if self._thread is None:
+            return True
+        self._thread.join(None if msecs is None else msecs / 1000.0)
+        return not self._thread.is_alive()
+
+    def _run(self) -> None:
         try:
             ok = self.strategy.warmup()
         except Exception:  # noqa: BLE001 — warmup must never crash the run
             log.exception("sudo warmup raised")
             ok = False
-        self.warmup_done.emit(ok)
+        try:
+            self.warmup_done.emit(ok)
+        except RuntimeError:
+            # The window (our parent QObject) was destroyed while warmup ran.
+            pass
 
 
 class PipelineWorker(QThread):
@@ -217,6 +255,10 @@ class MainWindow(QMainWindow):
         self.worker: PipelineWorker | None = None
         self._warmup_worker: WarmupWorker | None = None
         self._pending_mode: Mode | None = None
+        self._run_state: RunState = RunState.IDLE
+        # Set when closeEvent had to defer because the pipeline was still
+        # finishing; _on_pipeline_done completes the close.
+        self._close_requested = False
 
         # ── Phase views ────────────────────────────────────────────────────
         self._views = {
@@ -334,6 +376,16 @@ class MainWindow(QMainWindow):
         self._update_btn.clicked.connect(lambda: self._start_run(Mode.INTERACTIVE))
         toolbar.addWidget(self._update_btn)
 
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setToolTip(
+            "Request cancellation. The package transaction currently running "
+            "is allowed to finish (interrupting pacman mid-transaction risks "
+            "database corruption); all remaining phases are skipped."
+        )
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel_clicked)
+        toolbar.addWidget(self._cancel_btn)
+
         toolbar.addSeparator()
         self._snap_btn = QPushButton("Snapshot Browser…")
         self._snap_btn.setToolTip(
@@ -404,16 +456,20 @@ class MainWindow(QMainWindow):
     # ── Run control ────────────────────────────────────────────────────────
 
     def _start_run(self, mode: Mode) -> None:
-        if self.worker is not None and self.worker.isRunning():
+        # Run-state machine (v0.4.17): every entry point funnels through this
+        # single guard. The old per-worker isRunning() checks had a gap — F5
+        # pressed between warmup_done emission and queued delivery passed both
+        # guards and launched a second pipeline.
+        if self._run_state is not RunState.IDLE:
             return
-        if self._warmup_worker is not None and self._warmup_worker.isRunning():
-            return
+        self._run_state = RunState.WARMUP
         self._reset_views()
         self._dry_btn.setEnabled(False)
         self._update_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(True)
         self._pending_mode = mode
 
-        # v0.4.5 F4b: run warmup on a background QThread so the askpass dialog
+        # v0.4.5 F4b: run warmup on a background thread so the askpass dialog
         # (ksshaskpass) doesn't freeze the event loop. The status bar stays
         # responsive and repaints correctly while waiting for the user's
         # password. _on_warmup_done starts the pipeline when warmup finishes.
@@ -430,16 +486,58 @@ class MainWindow(QMainWindow):
             self._status.showMessage(
                 "sudo warmup failed — askpass may prompt again during the run."
             )
+        mode = self._pending_mode
+        self._pending_mode = None
+        if mode is None:
+            # Cancelled during warmup — nothing to launch.
+            self._to_idle("Run cancelled.")
+            return
         # Warmup failure is non-fatal: the pipeline re-prompts on the first
         # sudo call inside snapshot. Proceed regardless.
-        if self._pending_mode is not None:
-            self._launch_pipeline(self._pending_mode)
+        self._run_state = RunState.RUNNING
+        self._launch_pipeline(mode)
+
+    def _on_cancel_clicked(self) -> None:
+        self._cancel_btn.setEnabled(False)
+        if self._run_state is RunState.WARMUP:
+            # Not launched yet — drop the pending launch. State returns to
+            # IDLE when the warmup thread reports back (it cannot be
+            # interrupted while sitting inside `sudo -A -v`).
+            self._pending_mode = None
+            self._status.showMessage("Cancelling…")
+            return
+        if self._run_state is RunState.RUNNING and self.worker is not None:
+            self.worker.cancel_event.set()
+            self._cancel_all_prompts()
+            self._status.showMessage(
+                "Cancelling — pacman finishes its current transaction; "
+                "remaining phases are skipped."
+            )
+
+    def _cancel_all_prompts(self) -> None:
+        """Unblock every prompter a worker thread could be waiting on."""
+        for p in (self.prompter, self.update_prompter, self.pkgbuild_prompter):
+            if p is not None:
+                p.cancel_pending()
+
+    def _to_idle(self, status_msg: str | None = None) -> None:
+        self._run_state = RunState.IDLE
+        self._dry_btn.setEnabled(True)
+        self._update_btn.setEnabled(True)
+        self._cancel_btn.setEnabled(False)
+        if status_msg:
+            self._status.showMessage(status_msg)
 
     def _launch_pipeline(self, mode: Mode) -> None:
         label = "dry-run" if mode is Mode.DRY_RUN else "update"
         self._status.showMessage(f"Running {label}…")
 
-        # Fresh bus per run so old subscribers don't pile up.
+        # Fresh bus per run so old subscribers don't pile up. The previous
+        # run's bridge is released here (not in _on_pipeline_done) because
+        # the old bus — which the Snapshot Browser may still route rollback
+        # log lines through between runs — holds a subscription to it.
+        if self.bridge is not None:
+            self.bridge.deleteLater()
         self.bus = EventBus()
         self.bridge = QtEventBridge(self.bus, parent=self)
         self.bridge.event.connect(self._on_phase_event)
@@ -459,6 +557,9 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         self.worker.finished_with_result.connect(self._on_pipeline_done)
+        # Per-run QThread objects used to accumulate on the window until
+        # close; release each one once its thread has actually finished.
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
         self._paint_heartbeat.start()
 
@@ -598,10 +699,19 @@ class MainWindow(QMainWindow):
     # ── Completion ─────────────────────────────────────────────────────────
 
     def _on_pipeline_done(self, result: PipelineResult | None) -> None:
-        self._dry_btn.setEnabled(True)
-        self._update_btn.setEnabled(True)
+        # Lifecycle teardown FIRST — including on the pipeline-raised (None)
+        # path, which previously returned before the heartbeat stop and left
+        # a 2 Hz repaint timer running forever while idle.
+        self._paint_heartbeat.stop()
+        self.worker = None  # finished→deleteLater releases the QThread object
+        self._to_idle()
+        if self._close_requested:
+            # The user already closed the window while the pipeline finished.
+            self.close()
+            return
         if result is None:
             self._status.showMessage("Pipeline failed unexpectedly — see log.")
+            self._repaint_chrome()
             return
         if result.summary:
             tag = result.summary.tag
@@ -631,7 +741,6 @@ class MainWindow(QMainWindow):
                 self._rail.select_phase("pacnew")
         self._result_banner.show_result(result)
         self._rail.mark_unstarted_skipped()
-        self._paint_heartbeat.stop()
         self._repaint_chrome()
         # Desktop notification on completion.
         notify.notify_completion(result, self.cfg)
@@ -654,7 +763,7 @@ class MainWindow(QMainWindow):
     # ── Preferences ────────────────────────────────────────────────────────
 
     def _open_snapshot_browser(self) -> None:
-        if self.worker is not None and self.worker.isRunning():
+        if self._run_state is not RunState.IDLE:
             self._status.showMessage("Pipeline running — close it before browsing snapshots.")
             return
         # Reuse the active bus if a run produced one (so rollback log lines route
@@ -662,20 +771,23 @@ class MainWindow(QMainWindow):
         # logging module.
         dlg = SnapshotBrowser(self.cfg, self.strategy, self.bus, parent=self)
         dlg.exec()
+        dlg.deleteLater()
 
     def _on_rollback_requested(self, snapshot_id: str) -> None:
-        if self.worker is not None and self.worker.isRunning():
+        if self._run_state is not RunState.IDLE:
             self._status.showMessage("Pipeline running — close it before browsing snapshots.")
             return
         dlg = SnapshotBrowser(
             self.cfg, self.strategy, self.bus, select_id=snapshot_id, parent=self
         )
         dlg.exec()
+        dlg.deleteLater()
 
     def _open_orphan_manager(self, orphans: list[str]) -> None:
         from archward.ui.dialogs.orphan_manager import OrphanManagerDialog
         dlg = OrphanManagerDialog(self.cfg, self.strategy, orphans=orphans, parent=self)
         dlg.exec()
+        dlg.deleteLater()
 
     def _open_welcome_wizard(self) -> None:
         from archward.ui.dialogs.welcome_wizard import WelcomeWizard
@@ -689,7 +801,7 @@ class MainWindow(QMainWindow):
         AboutDialog(parent=self).exec()
 
     def _open_preferences(self) -> None:
-        if self.worker is not None and self.worker.isRunning():
+        if self._run_state is not RunState.IDLE:
             self._status.showMessage("Pipeline running — close it before editing preferences.")
             return
         dlg = PreferencesDialog(self.cfg, config_path=self.config_path, parent=self)
@@ -700,6 +812,7 @@ class MainWindow(QMainWindow):
             lambda new_path: self._on_profile_switch_requested(new_path, dialog=dlg)
         )
         dlg.exec()
+        dlg.deleteLater()
 
     def _on_config_saved(self, new_cfg: ConfigModel) -> None:
         """Reload state from the freshly-saved config."""
@@ -722,7 +835,7 @@ class MainWindow(QMainWindow):
         Refused while a pipeline is running (Profile tab disables the button
         in that case too; this is defense in depth).
         """
-        if self.worker is not None and self.worker.isRunning():
+        if self._run_state is not RunState.IDLE:
             self._status.showMessage("Pipeline running — cannot switch profile.")
             return
         self.config_path = new_path
@@ -753,21 +866,29 @@ class MainWindow(QMainWindow):
         _s = QSettings()
         _s.setValue("ui/right_split_sizes", ",".join(str(x) for x in self._right_split.sizes()))
         _s.setValue("ui/main_split_sizes", ",".join(str(x) for x in self._main_split.sizes()))
+        if self._run_state is RunState.WARMUP:
+            # Drop the pending launch; the daemon warmup thread dies with the
+            # process (it cannot be interrupted inside `sudo -A -v`).
+            self._pending_mode = None
         if self.worker is not None and self.worker.isRunning():
             self.worker.cancel_event.set()
-            # If the worker is blocked waiting on a HIGH-risk decision the
-            # user can no longer make, force-cancel that wait so the thread
-            # can exit cleanly.
-            if self.prompter is not None:
-                self.prompter.cancel_pending_decision()
-            # Same defensive cancel for an in-flight pacman/AUR prompt.
-            if self.update_prompter is not None:
-                self.update_prompter.cancel_pending()
+            # If the worker is blocked waiting on any main-thread interaction
+            # (HIGH-risk decision, gate override, pacman/AUR prompt, PKGBUILD
+            # review modal) the user can no longer answer, force-cancel every
+            # wait so the thread can exit cleanly instead of deadlocking.
+            self._cancel_all_prompts()
             self.worker.wait(3000)
             if self.worker.isRunning():
-                log.warning("closeEvent: worker still alive after 3 s; disconnecting signals")
-                try:
-                    self.worker.finished_with_result.disconnect()
-                except RuntimeError:
-                    pass
+                # pacman is mid-transaction and must be allowed to finish;
+                # destroying a running QThread aborts the whole process.
+                # Keep the window alive and close automatically once the
+                # pipeline returns.
+                log.warning("closeEvent: pipeline still finishing; deferring close")
+                self._close_requested = True
+                self._status.showMessage(
+                    "Finishing the current transaction — the window closes "
+                    "when it completes."
+                )
+                event.ignore()
+                return
         super().closeEvent(event)

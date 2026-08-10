@@ -18,6 +18,7 @@ import pytest
 
 from archward.events import EventBus
 from archward.pacman import prompts
+from archward.pacman import runner as runner_mod
 from archward.pacman.runner import run_streaming
 
 
@@ -129,6 +130,95 @@ def test_pty_path_cancel_via_empty_response_sigints_subprocess() -> None:
     # bash's `trap '... INT'` exit is 130. We just need a non-zero code that
     # proves the subprocess didn't reach the post-read echo.
     assert code != 0
+
+
+def test_pty_cancel_event_interrupts_via_tty() -> None:
+    """Setting cancel_event mid-run delivers SIGINT through the PTY line
+    discipline (Ctrl-C write, not killpg — the mechanism that also works
+    for root-owned sudo children)."""
+    bus, _ = _bus_with_capture()
+    cancel = threading.Event()
+
+    def provider(line: str, kind: prompts.PromptKind) -> str:
+        raise AssertionError("no prompt expected")
+
+    # Cancel as soon as the child's first output line crosses the bus.
+    def watcher(ev) -> None:
+        if ev.message and "started" in ev.message:
+            cancel.set()
+
+    bus.subscribe(watcher)
+
+    argv = ["bash", "-c", "trap 'exit 130' INT; echo started; sleep 30; echo never"]
+    code, captured = run_streaming(
+        argv,
+        strategy=_NoopSudoStrategy(),
+        bus=bus,
+        phase="test",
+        use_sudo=False,
+        cancel_event=cancel,
+        prompt_provider=provider,
+    )
+
+    assert code != 0
+    assert "never" not in "\n".join(captured)
+
+
+def test_pty_cancel_escalates_to_sigterm_when_sigint_ignored(monkeypatch) -> None:
+    """A child that ignores SIGINT is SIGTERMed after the grace period."""
+    monkeypatch.setattr(runner_mod, "_CANCEL_TERM_GRACE_S", 0.5)
+    bus, _ = _bus_with_capture()
+    cancel = threading.Event()
+
+    def provider(line: str, kind: prompts.PromptKind) -> str:
+        raise AssertionError("no prompt expected")
+
+    def watcher(ev) -> None:
+        if ev.message and "started" in ev.message:
+            cancel.set()
+
+    bus.subscribe(watcher)
+
+    # trap '' INT — SIGINT ignored (inherited by sleep); only SIGTERM works.
+    argv = ["bash", "-c", "trap '' INT; echo started; sleep 30; echo never"]
+    code, captured = run_streaming(
+        argv,
+        strategy=_NoopSudoStrategy(),
+        bus=bus,
+        phase="test",
+        use_sudo=False,
+        cancel_event=cancel,
+        prompt_provider=provider,
+    )
+
+    assert code != 0
+    assert "never" not in "\n".join(captured)
+
+
+def test_pty_prompt_cancel_keeps_prompt_text_in_capture() -> None:
+    """Cancelling at a prompt must not clear the pending buffer — the prompt
+    text stays available to the final flush / post-mortem capture."""
+    bus, _ = _bus_with_capture()
+
+    def cancel_provider(line: str, kind: prompts.PromptKind) -> str:
+        return ""
+
+    argv = [
+        "bash",
+        "-c",
+        "trap 'exit 130' INT; read -p '[Y/n] ' ans; echo done=$ans",
+    ]
+    code, captured = run_streaming(
+        argv,
+        strategy=_NoopSudoStrategy(),
+        bus=bus,
+        phase="test",
+        use_sudo=False,
+        prompt_provider=cancel_provider,
+    )
+
+    assert code != 0
+    assert "[Y/n]" in "\n".join(captured)
 
 
 def test_pipe_path_backward_compatibility_no_prompt_provider() -> None:
