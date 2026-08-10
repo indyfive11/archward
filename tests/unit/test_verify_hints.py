@@ -175,3 +175,11 @@ def test_all_documented_hints_resolve_to_strings() -> None:
                 "service", "plugin"):
         text = help_text.get("verify_hint", key)
         assert text, f"verify_hint.{key} should have non-empty text"
+
+
+def test_stale_libs_hint_resolves_via_check_name() -> None:
+    """v0.4.16 regression: the hint was registered as "stale-libs" but the
+    lookup key derived from the check name is "stale_libs" — the What-to-do
+    button never appeared for stale-libs failures."""
+    key = _hint_key_for("universal", "stale-libs")
+    assert help_text.get("verify_hint", key), "stale-libs hint must resolve"

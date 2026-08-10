@@ -70,3 +70,21 @@ def test_sudo_warmup_timeout_logged(monkeypatch, caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="archward.privilege.sudo"):
         strategy.warmup()
     assert any("timed out" in r.message for r in caplog.records)
+
+
+def test_persistent_sudo_warmup_has_timeout(monkeypatch) -> None:
+    """v0.4.16: PersistentSudoStrategy.warmup ran `sudo -A -v` with NO
+    timeout — a wedged askpass hung the WarmupWorker thread forever. It must
+    pass a timeout and map TimeoutExpired to False."""
+    from archward.privilege.sudo import PersistentSudoStrategy
+
+    strategy = PersistentSudoStrategy(None)
+    seen: dict = {}
+
+    def fake_run(argv, **kw):
+        seen.update(kw)
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout", 0))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert strategy.warmup() is False
+    assert seen.get("timeout"), "sudo -A -v must run with a timeout"

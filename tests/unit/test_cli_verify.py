@@ -37,6 +37,7 @@ def _seed_snapshot(snap_dir: Path, snap_id: str = "2026-05-15_134116") -> Path:
     (pkg / "all.txt").write_text("bash 5.2-1\nglibc 2.39-1\n")
     (pkg / "critical.txt").write_text("=== Critical ===\nglibc: 2.39-1\n")
     (p / "configs").mkdir()
+    (p / "configs" / "pacman.conf").write_text("[options]\n")
     return p
 
 

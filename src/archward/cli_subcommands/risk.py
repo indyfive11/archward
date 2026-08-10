@@ -19,9 +19,12 @@ def cmd_risk(args, config_path: Path | None) -> int:
     cfg = build_config(config_path)
     bus = EventBus()  # no subscriber — output formatted below
 
-    updates = classify_pending(cfg, bus)
+    outcome = classify_pending(cfg, bus)
+    updates = outcome.updates
 
-    if not updates:
+    if not outcome.check_ok:
+        print(f"WARNING: {outcome.check_error} — pending-update list unavailable.")
+    elif not updates:
         print("No pending official updates.")
     else:
         for level in (RiskLevel.HIGH, RiskLevel.MEDIUM, RiskLevel.LOW):

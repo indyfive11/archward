@@ -367,7 +367,7 @@ HELP: dict[tuple[str, str], str] = {
         "Critical and High severity advisories should be addressed promptly. "
         "If `arch-audit` is installed, it will handle this check instead."
     ),
-    ("verify_hint", "stale-libs"): (
+    ("verify_hint", "stale_libs"): (
         "A reboot resolves all stale-library issues simultaneously and is the "
         "most practical choice when many services are affected.\n\n"
         "To restart services individually instead:\n"

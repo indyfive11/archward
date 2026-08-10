@@ -263,6 +263,14 @@ def test_verdict_generous_on_keep10_timer() -> None:
     assert s is RollbackSafety.GENEROUS
 
 
+def test_verdict_generous_on_keep4_timer() -> None:
+    """v0.4.16 regression: keep==4 fell through to UNMANAGED, whose text
+    falsely claimed no timer was running."""
+    s, msg = cp._assess("enabled", 4, ("KeepInstalled",), ())
+    assert s is RollbackSafety.GENEROUS
+    assert "never auto-pruned" not in msg
+
+
 def test_verdict_unmanaged_no_timer_no_hook() -> None:
     """The live-machine case: timer disabled, no cleaning hook."""
     s, msg = cp._assess("disabled", 3, ("KeepInstalled",), ())

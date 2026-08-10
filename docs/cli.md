@@ -252,10 +252,11 @@ listed separately and only removed when `--clean-orphans` is passed.
 
 ## `archward rollback`
 
-All four variants resolve the snapshot first and build the sudo
+All five variants resolve the snapshot first and build the sudo
 strategy. Resolution exits 3 if the snapshot is missing, or if it's
-**incomplete** — missing `.timestamp`, empty `packages/all.txt`, or no
-`configs/` directory (`critical.txt` is reconstructable and not
+**incomplete** — missing `.timestamp`, missing/empty `packages/all.txt`,
+or a missing/empty `configs/` directory (`critical.txt` is
+reconstructable and not
 required). The specific missing section is printed; archward refuses
 *before* it touches pacman state, so you never get a half-applied
 restore from a
@@ -343,6 +344,26 @@ Exit 3 = snapshot missing.
 > Note: `--yes` (the flag-form auto-confirm) does **not** bypass the
 > boot-critical YES gate. That gate is intentionally a separate,
 > conscious decision.
+
+### `archward rollback reinstall <id> [pkg ...] [--yes]`
+
+List or reinstall packages *removed* since a snapshot (a dependency
+dropped by a replacement, an accidental `pacman -Rns`).
+
+```
+archward rollback reinstall <snapshot-id> [pkg ...] [--yes]
+```
+
+Without arguments, lists every removed package with its snapshot
+version, explicit/dep status, and reinstall source — cached
+(`pacman -U` of the snapshot version), repos (`pacman -S`), or the
+detected AUR helper — then asks `reinstall the above? [y/N]`. Naming
+packages restricts the set; `--yes` skips the prompt.
+
+Exit 0 = reinstalled (or nothing removed, or user declined). Exit 1 =
+any reinstall failed. Exit 2 = none of the named packages are removed.
+Exit 3 = snapshot missing/incomplete. AUR packages with no helper
+available are skipped with a message.
 
 ---
 
@@ -558,7 +579,7 @@ it must come **before** the subcommand:
 ```bash
 archward --profile lab verify
 archward --profile lab snapshot list
-archward --profile lab rollback package 2026-05-15_134329 nvidia
+archward --profile lab rollback package 2026-05-15_134329 mesa
 ```
 
 Each profile has its own snapshot directory + config, so

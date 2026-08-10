@@ -201,6 +201,41 @@ def test_success_clears_quarantine_entry(tmp_path):
     assert entry.status == "resolved"
 
 
+def test_helper_nonzero_exit_records_no_success(tmp_path):
+    """v0.4.16: helper exits nonzero with no scanned per-package failure
+    (died pre-build, network error) — nothing was verifiably updated, so a
+    quarantined package in its retry window must NOT be marked resolved."""
+    cfg = _cfg_model()
+    bus = _FakeBus()
+
+    q = AurQuarantine(cfg.aur)
+    _seed_quarantined(q, "radarr", "6.1.1", retry_after=time.time() - 1)  # retry window open
+
+    with _patch_quarantine(q, tmp_path):
+        with _patch_helper([("radarr", "6.1.0", "6.1.1")], exit_code=1, output=[]):
+            run_aur_update(cfg, _FakeStrategy(), bus)
+
+    entry = q.entry("radarr")
+    assert entry is not None
+    assert entry.status == "quarantined", "nonzero helper exit must not clear quarantine"
+
+
+def test_unknown_failure_attribution_not_quarantined(tmp_path):
+    """v0.4.16: an error marker with no attributable package must not create
+    a quarantine entry literally named "(unknown)"."""
+    cfg = _cfg_model()
+    bus = _FakeBus()
+
+    q = AurQuarantine(cfg.aur)
+    output = ["==> ERROR: something failed before any package context"]
+
+    with _patch_quarantine(q, tmp_path):
+        with _patch_helper([("radarr", "6.1.0", "6.1.1")], exit_code=1, output=output):
+            run_aur_update(cfg, _FakeStrategy(), bus)
+
+    assert q.entry("(unknown)") is None
+
+
 def test_quarantine_disabled_skips_all_logic(tmp_path):
     """When quarantine_enabled=False, no quarantine checks happen."""
     cfg = _cfg_model(quarantine_enabled=False)

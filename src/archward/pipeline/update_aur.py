@@ -273,6 +273,10 @@ def run_aur_update(
     skipped_pkgs = set(quarantine_ignored) | set(review_ignored)
 
     for f in failures:
+        if f.package == "(unknown)":
+            # Error output with no attributable package — worth logging, but
+            # a quarantine entry for a package named "(unknown)" is junk.
+            continue
         version = pending_versions.get(f.package, "unknown")
         just_activated = q.record_failure(f.package, version, f.last_lines)
         if just_activated:
@@ -280,9 +284,14 @@ def run_aur_update(
             if hint:
                 bus.emit_log(PHASE, f"  Hint: {hint}")
 
-    for pkg, _old, new in pending:
-        if pkg not in failed_pkgs and pkg not in skipped_pkgs:
-            q.record_success(pkg)
+    # Successes only count when the helper itself exited 0. On a nonzero
+    # exit with no scanned per-package failure (helper died pre-build,
+    # network error, user Ctrl-C) nothing was verifiably updated — recording
+    # success would wrongly clear quarantine counters.
+    if exit_code == 0:
+        for pkg, _old, new in pending:
+            if pkg not in failed_pkgs and pkg not in skipped_pkgs:
+                q.record_success(pkg)
 
     q.save()
 
@@ -294,7 +303,7 @@ def run_aur_update(
     elif failures:
         bus.emit_result(PHASE, f"completed with {len(failures)} build failure(s){qsuffix}")
     else:
-        bus.emit_result(PHASE, f"helper exited {exit_code}{qsuffix}")
+        bus.emit_result(PHASE, f"helper FAILED (exit {exit_code}){qsuffix}")
 
     return AurResult(
         exit_code=exit_code,

@@ -20,6 +20,7 @@ HIGH-risk approval and gate-override use GuiPrompter (BlockingQueuedConnection).
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from pathlib import Path
 
@@ -88,6 +89,20 @@ _PHASE_TO_VIEW = {
     "hooks_post": "verify",
 }
 
+# Zero counts are not failures: "verify: 0 FAIL, 2 WARN" must not read as a fail.
+_ZERO_COUNT = re.compile(r"\b0 (?:fail|warn)\w*")
+
+
+def _classify_result_message(message: str) -> str:
+    """Map a PHASE_RESULT message to a rail status (fail/skipped/warn/pass)."""
+    msg = _ZERO_COUNT.sub("", message.lower())
+    if re.search(r"\bfail", msg) or "abort" in msg:
+        return "fail"
+    if re.search(r"\bskip", msg):
+        return "skipped"
+    if re.search(r"\bwarn", msg):
+        return "warn"
+    return "pass"
 
 
 class WarmupWorker(QThread):
@@ -186,7 +201,7 @@ class MainWindow(QMainWindow):
 
         # ── State ──────────────────────────────────────────────────────────
         self.cfg = build_config(config_path)
-        setup_logging(self.cfg.general.log_dir)
+        setup_logging(self.cfg.general.log_dir, keep_logs=self.cfg.general.keep_logs)
         self.bus: EventBus | None = None
         self.bridge: QtEventBridge | None = None
         self.strategy: SudoStrategy = build_sudo_strategy(self.cfg)
@@ -530,16 +545,7 @@ class MainWindow(QMainWindow):
                 self._views["update"].append(msg)
 
         elif ev.kind is PhaseEventKind.PHASE_RESULT:
-            msg = (ev.message or "").lower()
-            if "fail" in msg or "abort" in msg:
-                rail_status = "fail"
-            elif "skip" in msg:
-                rail_status = "skipped"
-            elif "warn" in msg:
-                rail_status = "warn"
-            else:
-                rail_status = "pass"
-            self._rail.set_status(ev.phase, rail_status)
+            self._rail.set_status(ev.phase, _classify_result_message(ev.message or ""))
             self._log.append_line(f"  → {ev.message or ''}")
             self._absorb_payload(ev)
 
@@ -706,7 +712,7 @@ class MainWindow(QMainWindow):
         # Re-route logging if log_dir changed (otherwise the old
         # RotatingFileHandler would keep writing to the previous path).
         # setup_logging() is idempotent — it clears handlers before installing.
-        setup_logging(self.cfg.general.log_dir)
+        setup_logging(self.cfg.general.log_dir, keep_logs=self.cfg.general.keep_logs)
         self._status.showMessage("Preferences saved.")
 
     def _on_profile_switch_requested(self, new_path, *, dialog) -> None:
@@ -722,7 +728,7 @@ class MainWindow(QMainWindow):
         self.config_path = new_path
         self.cfg = build_config(new_path)
         self.strategy = build_sudo_strategy(self.cfg)
-        setup_logging(self.cfg.general.log_dir)
+        setup_logging(self.cfg.general.log_dir, keep_logs=self.cfg.general.keep_logs)
         if new_path is not None:
             self.setWindowTitle(f"Archward — profile: {new_path.stem}")
             self._status.showMessage(

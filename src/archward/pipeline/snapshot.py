@@ -110,7 +110,8 @@ def _gather_packages(snap_root: Path, cfg: ConfigModel) -> dict[str, Path]:
     explicit = pq.list_explicit()
     all_pkgs = pq.list_all()
     foreign = pq.list_foreign()
-    pending = pq.checkupdates()
+    cu = pq.checkupdates()
+    pending = cu.pending
 
     _write_text(pkg_dir / "explicit.txt", "\n".join(explicit) + "\n")
     _write_text(
@@ -121,12 +122,13 @@ def _gather_packages(snap_root: Path, cfg: ConfigModel) -> dict[str, Path]:
         pkg_dir / "aur.txt",
         "\n".join(f"{n} {v}" for n, v in foreign) + "\n",
     )
-    _write_text(
-        pkg_dir / "pending-official.txt",
-        ("\n".join(f"{p.name} {p.old_version} -> {p.new_version}" for p in pending) + "\n")
-        if pending
-        else "(no updates pending)\n",
-    )
+    if pending:
+        pending_text = "\n".join(f"{p.name} {p.old_version} -> {p.new_version}" for p in pending) + "\n"
+    elif cu.ok:
+        pending_text = "(no updates pending)\n"
+    else:
+        pending_text = f"(pending-update check failed: {cu.error})\n"
+    _write_text(pkg_dir / "pending-official.txt", pending_text)
 
     # critical.txt is the rollback target list. v0.2.0 fix: kernel packages
     # match cfg.risk.kernel_patterns (fnmatch) and were previously omitted —
@@ -352,6 +354,14 @@ def take_snapshot(
         bus.emit_log(PHASE, "[6/6] Pacnew baseline")
         _capture_pacnew_baseline(snap_root)
 
+        # Content validation BEFORE the .timestamp marker: a snapshot that
+        # can't back a rollback (no package baseline, no config copies)
+        # must never be marked complete — the pipeline would otherwise
+        # proceed to update trusting a rollback point that doesn't exist.
+        problems = _content_problems(snap_root)
+        if problems:
+            raise SnapshotIncompleteError("; ".join(problems))
+
         # Timestamp markers — written LAST so a partial dir is never
         # marked as a real snapshot.
         now = datetime.now()
@@ -449,6 +459,22 @@ def validate_snapshot(path: Path) -> list[str]:
         except (OSError, ValueError):
             problems.append(".timestamp is unreadable or not an epoch")
 
+    problems.extend(_content_problems(path))
+    return problems
+
+
+class SnapshotIncompleteError(RuntimeError):
+    """A freshly-taken snapshot failed content validation — unsafe to trust."""
+
+
+def _content_problems(path: Path) -> list[str]:
+    """Content checks shared by validate_snapshot and take_snapshot.
+
+    Everything in validate_snapshot except the `.timestamp` checks, so a
+    fresh snapshot can be validated *before* its marker is written.
+    """
+    problems: list[str] = []
+
     all_txt = path / "packages" / "all.txt"
     try:
         if not all_txt.is_file() or not all_txt.read_text(
@@ -461,9 +487,16 @@ def validate_snapshot(path: Path) -> list[str]:
     except OSError:
         problems.append("packages/all.txt unreadable")
 
-    if not (path / "configs").is_dir():
+    configs = path / "configs"
+    if not configs.is_dir():
         problems.append(
             "configs/ missing — no pre-update config copies to restore"
+        )
+    elif not any(configs.iterdir()):
+        # /etc/pacman.conf always exists on an Arch system, so an empty
+        # configs/ means every privileged copy silently failed.
+        problems.append(
+            "configs/ is empty — config capture failed (sudo copy denied?)"
         )
 
     return problems

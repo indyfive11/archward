@@ -126,7 +126,7 @@ def setup_app(
     `config_path` overrides the default config location (used by `--profile`).
     """
     cfg = build_config(config_path)
-    setup_logging(cfg.general.log_dir)
+    setup_logging(cfg.general.log_dir, keep_logs=cfg.general.keep_logs)
     bus = build_event_bus()
     strategy = build_sudo_strategy(cfg)
     if warmup_sudo:

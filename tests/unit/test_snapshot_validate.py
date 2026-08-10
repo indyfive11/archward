@@ -25,6 +25,7 @@ def _complete(p: Path) -> Path:
     (pkg / "all.txt").write_text("bash 5.2-1\n")
     (pkg / "critical.txt").write_text("=== Critical ===\n")
     (p / "configs").mkdir()
+    (p / "configs" / "pacman.conf").write_text("[options]\n")
     return p
 
 
@@ -70,8 +71,17 @@ def test_missing_critical_txt_NOT_flagged(tmp_path) -> None:
 
 def test_missing_configs_dir_flagged(tmp_path) -> None:
     p = _complete(tmp_path / "snap")
+    (p / "configs" / "pacman.conf").unlink()
     (p / "configs").rmdir()
     assert any("configs/" in x for x in validate_snapshot(p))
+
+
+def test_empty_configs_dir_flagged(tmp_path) -> None:
+    """v0.4.16: an empty configs/ means every sudo copy silently failed —
+    /etc/pacman.conf always exists, so a real capture is never empty."""
+    p = _complete(tmp_path / "snap")
+    (p / "configs" / "pacman.conf").unlink()
+    assert any("configs/ is empty" in x for x in validate_snapshot(p))
 
 
 def test_multiple_problems_all_reported(tmp_path) -> None:

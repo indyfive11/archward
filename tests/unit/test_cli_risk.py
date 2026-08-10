@@ -10,6 +10,7 @@ import pytest
 from archward.cli import _build_parser
 from archward.cli_subcommands import risk as cmd
 from archward.models.update import PendingUpdate, RiskLevel
+from archward.pipeline.risk import ClassifiedPending
 
 
 # ── parser ────────────────────────────────────────────────────────────────
@@ -55,7 +56,7 @@ def _fake_preview(replacements=(), conflicts=()):
 
 def test_risk_no_updates(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cmd, "build_config", lambda *a, **k: _fake_cfg())
-    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: [])
+    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: ClassifiedPending())
     monkeypatch.setattr(cmd, "preview_transaction", lambda bus: _fake_preview())
 
     args = Namespace(no_aur=True)
@@ -66,10 +67,10 @@ def test_risk_no_updates(monkeypatch, capsys) -> None:
 
 def test_risk_groups_by_level_high_before_low(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cmd, "build_config", lambda *a, **k: _fake_cfg())
-    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: [
+    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: ClassifiedPending(updates=[
         _pkg("vim", RiskLevel.LOW),
         _pkg("glibc", RiskLevel.HIGH, reason="in high-risk list"),
-    ])
+    ]))
     monkeypatch.setattr(cmd, "preview_transaction", lambda bus: _fake_preview())
 
     args = Namespace(no_aur=True)
@@ -82,7 +83,7 @@ def test_risk_groups_by_level_high_before_low(monkeypatch, capsys) -> None:
 
 def test_risk_shows_aur_pending(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cmd, "build_config", lambda *a, **k: _fake_cfg())
-    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: [])
+    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: ClassifiedPending())
     monkeypatch.setattr(cmd, "preview_transaction", lambda bus: _fake_preview())
 
     fake_helper = MagicMock()
@@ -101,7 +102,7 @@ def test_risk_shows_aur_pending(monkeypatch, capsys) -> None:
 
 def test_risk_no_aur_flag_skips_helper(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cmd, "build_config", lambda *a, **k: _fake_cfg())
-    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: [])
+    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: ClassifiedPending())
     monkeypatch.setattr(cmd, "preview_transaction", lambda bus: _fake_preview())
 
     import archward.aur.helper as helper_mod
@@ -115,9 +116,9 @@ def test_risk_no_aur_flag_skips_helper(monkeypatch, capsys) -> None:
 
 def test_risk_always_exits_0(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cmd, "build_config", lambda *a, **k: _fake_cfg())
-    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: [
+    monkeypatch.setattr(cmd, "classify_pending", lambda cfg, bus: ClassifiedPending(updates=[
         _pkg("glibc", RiskLevel.HIGH),
-    ])
+    ]))
     monkeypatch.setattr(cmd, "preview_transaction", lambda bus: _fake_preview())
 
     args = Namespace(no_aur=True)

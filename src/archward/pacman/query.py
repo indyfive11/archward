@@ -11,6 +11,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+from archward.locale_env import c_locale_env
 from archward.logging_setup import strip_ansi
 
 log = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ def _run(argv: list[str]) -> tuple[int, str, str]:
             capture_output=True,
             text=True,
             timeout=_QUERY_TIMEOUT_S,
-            env={**__import__("os").environ, "LANG": "C"},
+            env=c_locale_env(),
         )
     except FileNotFoundError as e:
         log.error("command not found: %s", argv[0])
@@ -86,29 +87,40 @@ class PendingPkg:
 _PENDING_RE = re.compile(r"^(\S+)\s+(\S+)\s+->\s+(\S+)\s*$")
 
 
-def checkupdates() -> list[PendingPkg]:
-    """Run `checkupdates`; return parsed pending packages.
+@dataclass(frozen=True)
+class CheckupdatesResult:
+    """Outcome of `checkupdates` — distinguishes "no updates" from "check failed"."""
+
+    pending: tuple[PendingPkg, ...] = ()
+    ok: bool = True
+    error: str | None = None
+
+
+def checkupdates() -> CheckupdatesResult:
+    """Run `checkupdates`; return pending packages plus whether the check worked.
 
     `checkupdates` (from pacman-contrib) syncs into a separate DB at
     /tmp/checkup-db-<uid>/ — it never touches the system database, so it's safe
     to call without sudo and without risk of partial-update breakage.
 
-    Returns [] if checkupdates is not installed OR if there are no updates
-    (checkupdates returns exit code 2 in that case).
+    Exit codes: 0 = updates available, 2 = none pending — both trustworthy
+    (ok=True). Anything else (error, timeout, binary missing) returns ok=False:
+    an empty pending list then means "unknown", not "nothing pending".
     """
     if not shutil.which("checkupdates"):
-        return []
-    code, out, _ = _run(["checkupdates"])
-    # checkupdates exit codes: 0 = updates, 2 = no updates, 1 = error
-    if code != 0 and code != 2:
-        log.warning("checkupdates exited with code %d", code)
+        return CheckupdatesResult(ok=False, error="checkupdates not installed (pacman-contrib)")
+    code, out, err = _run(["checkupdates"])
+    if code not in (0, 2):
+        reason = "checkupdates timed out" if err == "timeout" else f"checkupdates exited {code}"
+        log.warning("%s", reason)
+        return CheckupdatesResult(ok=False, error=reason)
     pending: list[PendingPkg] = []
     for line in out.splitlines():
         m = _PENDING_RE.match(line.strip())
         if not m:
             continue
         pending.append(PendingPkg(m.group(1), m.group(2), m.group(3)))
-    return pending
+    return CheckupdatesResult(pending=tuple(pending))
 
 
 @dataclass(frozen=True)

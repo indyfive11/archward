@@ -187,11 +187,18 @@ def run_pipeline(
             return result
 
     # ── Risk + transaction preview ──────────────────────────────────────────
-    pending = risk_phase.classify_pending(cfg, bus)
+    risk_outcome = risk_phase.classify_pending(cfg, bus)
+    pending = risk_outcome.updates
     result.pending = pending
 
     if not pending:
-        bus.emit_log("risk", "No official-repo updates pending.")
+        if risk_outcome.check_ok:
+            bus.emit_log("risk", "No official-repo updates pending.")
+        else:
+            bus.emit_log(
+                "risk",
+                f"WARN: could not determine pending updates ({risk_outcome.check_error}).",
+            )
         if mode is Mode.DRY_RUN:
             result.summary = derive_result(
                 preflight_failed=False,
@@ -200,6 +207,7 @@ def run_pipeline(
                 verify=None,
                 pacnew_count=0,
                 was_dry_run=True,
+                pending_check_ok=risk_outcome.check_ok,
             )
             return result
     else:

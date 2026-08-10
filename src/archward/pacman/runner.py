@@ -3,7 +3,7 @@
 Implements the audit's subprocess buffering recipe (A4):
 - bufsize=1, text=True for line-buffered stdout
 - stderr merged into stdout so a single stream represents progress
-- LANG=C, --noprogressbar --color=never to keep output parse-stable
+- C locale (LANG/LC_ALL/LANGUAGE), --noprogressbar --color=never to keep output parse-stable
 - ANSI escapes stripped via logging_setup.strip_ansi before emitting
 """
 
@@ -19,6 +19,7 @@ import threading
 from typing import Callable
 
 from archward.events import EventBus
+from archward.locale_env import c_locale_env
 from archward.logging_setup import strip_ansi
 from archward.pacman.prompts import PromptKind, detect_prompt
 from archward.privilege.sudo import SudoStrategy
@@ -82,8 +83,7 @@ def run_streaming(
     SIGINT, which pacman handles cleanly between transactions (no DB damage).
     """
     full = [*strategy.argv_prefix(), *argv] if use_sudo else list(argv)
-    env = strategy.env()
-    env["LANG"] = "C"
+    env = c_locale_env(strategy.env())
 
     log.info("running: %s", " ".join(full))
     bus.emit_log(phase, "$ " + " ".join(full))
@@ -272,8 +272,7 @@ def run_capture(
     (every pre-v0.4.4 caller), behavior is unchanged.
     """
     full = [*strategy.argv_prefix(), *argv]
-    env = strategy.env()
-    env["LANG"] = "C"
+    env = c_locale_env(strategy.env())
     try:
         r = subprocess.run(
             full,

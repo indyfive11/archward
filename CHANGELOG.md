@@ -6,6 +6,69 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed — the "Truth" patch: things archward reported wrongly
+
+- **Phase rail showed the verify phase red on every run** — the rail status
+  was derived by substring-matching the result message, and
+  `"verify: 0 FAIL, 0 WARN"` contains "fail". Zero counts are now ignored and
+  keyword matching is word-boundary aware; `0 FAIL, 2 WARN` correctly shows
+  as a warning, not a failure.
+- **AUR helper failures could show a green rail** — a helper that exited
+  nonzero without a parseable per-package build failure produced the message
+  "helper exited N", which matched no status keyword and rendered as a pass.
+  The message now says `helper FAILED (exit N)`.
+- **checkupdates errors were reported as "no updates pending"** — exit code 1,
+  a timeout, or a missing binary all returned an empty pending list,
+  indistinguishable from "nothing to do"; a dry-run then reported
+  `RESULT:SUCCESS`. Errors now surface as a WARN in the risk phase, the
+  snapshot records the check failure instead of "(no updates pending)", and a
+  dry-run that couldn't check reports `RESULT:NEEDS_REVIEW`.
+- **A snapshot could be marked complete with nothing in it** — content
+  validation (non-empty `packages/all.txt`, non-empty `configs/`) now runs
+  *before* the `.timestamp` marker is written; a capture whose privileged
+  copies all silently failed aborts the pipeline instead of proceeding with
+  an unusable rollback point. `validate_snapshot` also rejects an empty
+  `configs/` directory.
+- **Localized systems could break output parsing** — subprocess environments
+  set only `LANG=C`, which `LC_ALL` and `LANGUAGE` override; a user with
+  `LC_ALL=de_DE.UTF-8` got localized pacman/makepkg output, making build
+  failures invisible to the scanner (and quarantine record successes) and
+  hiding replacement lines from the risk preview. All parsed subprocesses now
+  pin `LANG`, `LC_ALL`, and `LANGUAGE`.
+- **Stale-libs failures never showed their "What to do?" hint** — the hint
+  was registered under `stale-libs` but looked up as `stale_libs`.
+- **`general.keep_logs` did nothing** — the GUI-exposed setting is now
+  actually passed to the rotating log handler (previously hardcoded to 5).
+- **`keep_snapshots` default inconsistency** — the v0.4.7 default raise
+  (10 → 40) missed the `defaults.py` literal, so the effective default
+  depended on how the config was created. Unified to 40.
+- **`paccache -k4` misreported as UNMANAGED** — a keep count of exactly 4
+  with an enabled timer fell through to the UNMANAGED verdict, whose text
+  falsely claimed no timer was running. keep ≥ 4 now reads GENEROUS.
+- **AUR quarantine cleared on failed runs** — a helper that died before
+  building (network error, Ctrl-C) recorded success for every pending
+  package, wrongly resolving quarantine entries. Successes are now only
+  recorded when the helper exits 0, and unattributable build errors no
+  longer create a quarantine entry named "(unknown)".
+- **A wedged askpass could hang authentication forever** — the persistent
+  sudo warmup (`sudo -A -v`) ran with no timeout; it now times out after
+  5 minutes and reports failure instead of hanging the warmup thread.
+
+### Documentation
+
+- **recovery.md truth pass** — the walkthrough's
+  `archward rollback package … nvidia` example actually exits 2 (nvidia is
+  not in the critical set); examples now use an eligible package and document
+  the critical-set scope plus the manual `pacman -U` fallback archward
+  prints. The boot-critical YES gate is documented with its real package set
+  (glibc/systemd/openssl + variants — mesa/pipewire/openssh only get the
+  ordinary y/N confirm). Fixed the un-restore example's backup path
+  (`.pre-rollback.bak` sits beside the live file, e.g. in `/etc/pacman.d/`).
+  The cache-policy section now shows the CLI commands
+  (`archward cache status|gaps|set-keep|clean`) instead of implying the GUI
+  is required. `archward rollback reinstall` (shipped in v0.4.3, never
+  documented) is now covered in recovery.md, cli.md, and the man page.
+
 ## [0.4.15] — 2026-07-31
 
 ### Fixed

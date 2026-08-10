@@ -127,7 +127,9 @@ def default_config() -> ConfigModel:
     return ConfigModel(
         general=GeneralConfig(
             snapshot_dir=paths.snapshots_dir(),
-            keep_snapshots=10,
+            # Must match the GeneralConfig model default (raised 10 -> 40 in
+            # v0.4.7 with date-based retention; this literal was missed).
+            keep_snapshots=40,
             log_dir=paths.logs_dir(),
             keep_logs=20,
             notify_on_completion=True,

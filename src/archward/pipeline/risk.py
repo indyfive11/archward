@@ -12,6 +12,7 @@ from __future__ import annotations
 import fnmatch
 import logging
 import re
+from dataclasses import dataclass, field
 
 from archward.events import EventBus
 from archward.models.config import ConfigModel
@@ -90,10 +91,32 @@ def classify_one(pkg: str, old_version: str, new_version: str, cfg: ConfigModel)
     )
 
 
-def classify_pending(cfg: ConfigModel, bus: EventBus) -> list[PendingUpdate]:
+@dataclass(frozen=True)
+class ClassifiedPending:
+    """Classified pending updates plus whether the checkupdates call worked.
+
+    check_ok=False means `updates` is empty because the check FAILED (error,
+    timeout, binary missing) — not because nothing is pending.
+    """
+
+    updates: list[PendingUpdate] = field(default_factory=list)
+    check_ok: bool = True
+    check_error: str | None = None
+
+
+def classify_pending(cfg: ConfigModel, bus: EventBus) -> ClassifiedPending:
     """Run checkupdates, classify each entry per cfg.risk rules."""
     bus.emit_start(PHASE, "Risk classification")
-    pending = pq.checkupdates()
+    cu = pq.checkupdates()
+    if not cu.ok:
+        bus.emit_log(PHASE, f"WARN: {cu.error} — pending-update list unavailable")
+        bus.emit_result(
+            PHASE,
+            f"WARN: pending-update check unavailable ({cu.error})",
+            payload={"pending": [], "check_error": cu.error},
+        )
+        return ClassifiedPending(check_ok=False, check_error=cu.error)
+    pending = cu.pending
     bus.emit_log(PHASE, f"checkupdates: {len(pending)} pending official updates")
 
     classified = [classify_one(p.name, p.old_version, p.new_version, cfg) for p in pending]
@@ -108,7 +131,7 @@ def classify_pending(cfg: ConfigModel, bus: EventBus) -> list[PendingUpdate]:
         f"{len(classified)} pending: {high} HIGH, {medium} MEDIUM, {low} LOW",
         payload={"pending": [u.model_dump(mode="json") for u in classified]},
     )
-    return classified
+    return ClassifiedPending(updates=classified)
 
 
 def preview_transaction(bus: EventBus) -> pq.TransactionPreview:

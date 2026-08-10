@@ -197,6 +197,14 @@ or the full live relpath
 .SS archward rollback package ID PKG [\-\-confirm\-boot\-critical]
 Downgrade or upgrade one package to its snapshot version, from
 .IR /var/cache/pacman/pkg/ .
+Only packages tracked in the snapshot's
+.B critical.txt
+are eligible: the HIGH-risk set (glibc, systemd, openssl, mesa,
+pipewire, wireplumber, openssh and variants), kernel packages, and
+AUR/foreign packages. For anything else archward exits 2 and prints
+the manual
+.B pacman \-U
+command with the snapshot version filled in.
 Boot-critical packages (glibc, systemd, openssl, and their lib32 /
 \-libs variants) require
 .B \-\-confirm\-boot\-critical
@@ -220,6 +228,13 @@ acting. Boot-critical packages in the plan require
 .B \-\-confirm\-boot\-critical
 and a stdin
 .BR YES .
+.SS archward rollback reinstall ID [PKG ...] [\-\-yes]
+List or reinstall packages removed since the snapshot. Shows each
+removed package's snapshot version and reinstall source (cached
+version, repos, or the detected AUR helper), then asks for
+confirmation. Naming packages restricts the set;
+.B \-\-yes
+skips the prompt.
 .SS archward aur quarantine list
 Print a table of all AUR build quarantine entries (active and resolved).
 Columns: package, version, status (counting / quarantined / resolved),
@@ -358,7 +373,7 @@ Roll back the package the verify FAIL implicated:
 .PP
 .nf
 .RS
-archward rollback package 2026\-05\-15_134329 nvidia
+archward rollback package 2026\-05\-15_134329 mesa
 archward verify
 .RE
 .fi

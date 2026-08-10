@@ -163,11 +163,19 @@ class PersistentSudoStrategy:
     def warmup(self) -> bool:
         env = self._inner.env()
         try:
+            # The askpass dialog legitimately waits on a human, so the timeout
+            # is generous (sudo's own passwd_timeout default is 5 minutes) —
+            # but it must exist: a wedged/crashed askpass would otherwise hang
+            # the WarmupWorker thread forever.
             r = subprocess.run(
-                ["sudo", "-A", "-v"], check=False, env=env, capture_output=True
+                ["sudo", "-A", "-v"], check=False, env=env, capture_output=True,
+                timeout=300,
             )
         except FileNotFoundError:
             log.error("sudo binary not found")
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning("sudo -A -v warmup timed out after 300s (askpass wedged?)")
             return False
         return r.returncode == 0
 

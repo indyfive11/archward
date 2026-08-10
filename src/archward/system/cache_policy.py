@@ -345,7 +345,7 @@ def _assess(
             "paccache keeps 3 versions on a timer (the Arch-ish default) — "
             "about 2 rollback points per package. Reasonable for a desktop.",
         )
-    if timer_state == "enabled" and keep >= 5:
+    if timer_state == "enabled" and keep >= 4:
         return (
             RollbackSafety.GENEROUS,
             f"paccache keeps {keep} versions on a timer — deep rollback "

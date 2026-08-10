@@ -28,6 +28,7 @@ import subprocess
 import threading
 
 from archward.events import EventBus
+from archward.locale_env import c_locale_env
 from archward.pacman.runner import PromptProvider, run_streaming
 from archward.privilege.sudo import SudoStrategy
 
@@ -51,7 +52,7 @@ class AurutilsAdapter:
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**__import__("os").environ, "LANG": "C"},
+                env=c_locale_env(),
             )
         except FileNotFoundError:
             return []

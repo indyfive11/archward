@@ -180,7 +180,7 @@ def _attach_rollback_parser(subparsers) -> None:
         help="Downgrade/upgrade one package to its snapshot version.",
     )
     pkg_p.add_argument("snapshot_id", help="Snapshot directory name.")
-    pkg_p.add_argument("package", help="Package name (e.g. nvidia).")
+    pkg_p.add_argument("package", help="Package name (critical-set packages, e.g. mesa).")
     pkg_p.add_argument(
         "--confirm-boot-critical", action="store_true",
         help="Required when the package is boot-critical (glibc, systemd, etc.).",

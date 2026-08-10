@@ -38,6 +38,7 @@ def derive_result(
     verify: VerifyResult | None,
     pacnew_count: int,
     was_dry_run: bool = False,
+    pending_check_ok: bool = True,
 ) -> ReportSummary:
     """Map pipeline state to a primary RESULT tag and secondary annotations."""
 
@@ -60,9 +61,11 @@ def derive_result(
         )
 
     # Dry-run: pending packages are informational. Bash compat: emit NEEDS_REVIEW
-    # when HIGH-risk pending is present; otherwise SUCCESS.
+    # when HIGH-risk pending is present; otherwise SUCCESS. An empty pending
+    # list only means "nothing to do" when the checkupdates call actually
+    # worked — a failed check must not report SUCCESS.
     if was_dry_run:
-        if any(p.risk is RiskLevel.HIGH for p in pending):
+        if not pending_check_ok or any(p.risk is RiskLevel.HIGH for p in pending):
             return ReportSummary(
                 tag="RESULT:NEEDS_REVIEW",
                 secondary_tags=(),

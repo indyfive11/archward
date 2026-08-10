@@ -45,13 +45,54 @@ def test_partial_failure_cleans_up_snapshot_dir(tmp_path, monkeypatch) -> None:
     assert children == [], f"orphan snapshot dirs left behind: {children}"
 
 
+def _mock_working_gathers(monkeypatch) -> None:
+    """Gathers that produce the minimal content take_snapshot now validates."""
+
+    def fake_packages(snap_root: Path, cfg):
+        pkg = snap_root / "packages"
+        pkg.mkdir(parents=True, exist_ok=True)
+        (pkg / "all.txt").write_text("bash 5.2-1\n")
+        return {}
+
+    def fake_configs(snap_root: Path, strategy):
+        cdir = snap_root / "configs"
+        cdir.mkdir(parents=True, exist_ok=True)
+        (cdir / "pacman.conf").write_text("[options]\n")
+        return []
+
+    monkeypatch.setattr(snap_mod, "_gather_packages", fake_packages)
+    monkeypatch.setattr(snap_mod, "_gather_configs", fake_configs)
+    monkeypatch.setattr(snap_mod, "_gather_network", lambda *a, **k: None)
+    monkeypatch.setattr(snap_mod, "_gather_services", lambda *a, **k: {})
+    monkeypatch.setattr(snap_mod, "_gather_system", lambda *a, **k: None)
+    monkeypatch.setattr(snap_mod, "_capture_pacnew_baseline", lambda *a, **k: None)
+
+
 def test_successful_snapshot_keeps_dir(tmp_path, monkeypatch) -> None:
     """Happy path: gathers all succeed → snap_root has .timestamp + is preserved."""
     cfg = default_config()
     new_general = cfg.general.model_copy(update={"snapshot_dir": tmp_path / "snapshots"})
     cfg = cfg.model_copy(update={"general": new_general})
 
-    # Mock all gathers as no-ops returning empty.
+    _mock_working_gathers(monkeypatch)
+
+    bus = EventBus()
+    result = snap_mod.take_snapshot(cfg, MagicMock(), bus)
+
+    assert result.meta.path.exists()
+    assert (result.meta.path / ".timestamp").exists()
+
+
+def test_empty_capture_refused_before_timestamp(tmp_path, monkeypatch) -> None:
+    """v0.4.16: gathers that produce no rollback content (no all.txt, empty
+    configs/) must raise before the .timestamp marker is written, and the
+    partial dir is removed — the pipeline must not proceed trusting a
+    rollback point that doesn't exist."""
+    cfg = default_config()
+    new_general = cfg.general.model_copy(update={"snapshot_dir": tmp_path / "snapshots"})
+    cfg = cfg.model_copy(update={"general": new_general})
+
+    # Gathers "succeed" but capture nothing.
     monkeypatch.setattr(snap_mod, "_gather_packages", lambda *a, **k: {})
     monkeypatch.setattr(snap_mod, "_gather_configs", lambda *a, **k: [])
     monkeypatch.setattr(snap_mod, "_gather_network", lambda *a, **k: None)
@@ -60,7 +101,8 @@ def test_successful_snapshot_keeps_dir(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(snap_mod, "_capture_pacnew_baseline", lambda *a, **k: None)
 
     bus = EventBus()
-    result = snap_mod.take_snapshot(cfg, MagicMock(), bus)
+    with pytest.raises(snap_mod.SnapshotIncompleteError, match="all.txt"):
+        snap_mod.take_snapshot(cfg, MagicMock(), bus)
 
-    assert result.meta.path.exists()
-    assert (result.meta.path / ".timestamp").exists()
+    children = list((tmp_path / "snapshots").iterdir())
+    assert children == [], f"partial snapshot dir left behind: {children}"

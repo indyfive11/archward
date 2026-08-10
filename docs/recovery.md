@@ -114,18 +114,31 @@ nvidia upgrade is your prime suspect.
 
 ### Step 5 — roll back the suspect package
 
+`archward rollback package` covers the packages tracked in the
+snapshot's `packages/critical.txt`: the HIGH-risk set (glibc, systemd,
+openssl, mesa, pipewire, wireplumber, openssh and their lib32/-libs
+variants), kernel packages, and AUR/foreign packages. For those:
+
 ```bash
-archward rollback package 2026-05-15_134329 nvidia
+archward rollback package 2026-05-15_134329 mesa
 ```
 
 archward looks in `/var/cache/pacman/pkg/` for the snapshot version,
 runs `sudo pacman -U` to install it, and the older version replaces
 the broken new one. If the cached package is present this just works.
 
+For any *other* package — including `nvidia`, which is not in the
+critical set — archward exits 2 and prints the exact manual command
+with the snapshot version filled in:
+
+```bash
+sudo pacman -U /var/cache/pacman/pkg/nvidia-575.64.05-1-*.pkg.tar.*
+```
+
 If the cache was pruned (e.g. by `paccache` aggressively) you'll see:
 
 ```
-FAIL: version 575.64.05-1 not present in /var/cache/pacman/pkg/
+FAIL: version 25.1.2-1 not present in /var/cache/pacman/pkg/
 ```
 
 In that case you have two options:
@@ -246,13 +259,35 @@ archward rollback all-packages 2026-05-15_150000
 
 Pre-rollback snapshots are why bulk rollback is safe to try.
 
+### Packages that were *removed* (not downgraded)
+
+If the breakage is a package that disappeared since the snapshot
+(a dependency dropped by a replacement, an accidental `-Rns`),
+downgrading won't bring it back — reinstalling will:
+
+```bash
+# List everything removed since the snapshot, with reinstall source
+# (cached version / repos / AUR helper), then confirm:
+archward rollback reinstall 2026-05-15_134329
+
+# Reinstall only specific packages, no prompt:
+archward rollback reinstall 2026-05-15_134329 --yes pipewire-jack
+```
+
 ### The boot-critical YES gate
 
-Bulk operations refuse to downgrade `glibc`, `systemd`, `openssl`,
-`mesa`, `pipewire`, `wireplumber`, or `openssh` without an explicit
-`--confirm-boot-critical` flag AND a case-sensitive `YES` typed on
-stdin. That's intentional friction — downgrading these can leave the
-system unbootable. If you're sure:
+Bulk operations refuse to downgrade the boot-critical set — `glibc`,
+`systemd`, `openssl` (and their `lib32-`/`-libs` variants) — without
+an explicit `--confirm-boot-critical` flag AND a case-sensitive `YES`
+typed on stdin. That's intentional friction — downgrading these can
+leave the system unbootable.
+
+Other HIGH-risk packages in the plan (`mesa`, `pipewire`,
+`wireplumber`, `openssh`, …) are flagged in the printed plan but only
+gated behind the ordinary `proceed? [y/N]` confirm — read the plan
+before answering.
+
+If you're sure about a boot-critical downgrade:
 
 ```bash
 archward rollback all-packages 2026-05-15_134329 --confirm-boot-critical
@@ -290,8 +325,17 @@ Every rollback in this guide pulls the old `.pkg.tar.*` from
 can't happen — so it's worth knowing your cache policy *before* you
 need it.
 
-Open **Preferences → Cache**. The coloured banner is archward's
-rollback-safety verdict:
+From a shell (this guide's home turf):
+
+```bash
+archward cache status     # policy + size + the rollback-safety verdict
+archward cache gaps       # installed packages that can NOT roll back from cache
+archward cache set-keep 5 # raise the paccache keep count
+archward cache clean      # prune now, to the effective keep count
+```
+
+The same verdict is in the GUI under **Preferences → Cache** as a
+coloured banner:
 
 - **BALANCED / GENEROUS** — you have rollback headroom. Nothing to do.
 - **TIGHT** — only ~1 prior version kept; a single bad update uses it
@@ -324,20 +368,20 @@ by manual `pacman -Sc`, or by aggressive cleanup hooks. If
 `archward rollback package` says the cache version is missing:
 
 ```bash
-archward rollback package 2026-05-15_134329 nvidia
-# → FAIL: version 575.64.05-1 not present in /var/cache/pacman/pkg/
+archward rollback package 2026-05-15_134329 mesa
+# → FAIL: version 25.1.2-1 not present in /var/cache/pacman/pkg/
 ```
 
 Use the Arch Linux Archive — every package version is preserved:
 
 ```
-https://archive.archlinux.org/packages/n/nvidia/
+https://archive.archlinux.org/packages/m/mesa/
 ```
 
 Download the `.pkg.tar.zst` for the right version + your arch, then:
 
 ```bash
-sudo pacman -U /tmp/nvidia-575.64.05-1-x86_64.pkg.tar.zst
+sudo pacman -U /tmp/mesa-25.1.2-1-x86_64.pkg.tar.zst
 ```
 
 After installing, run `archward verify` to confirm the rollback fixed
@@ -352,8 +396,11 @@ Each `restore_config` writes a `.pre-rollback.bak` next to the live
 file before overwriting it. If the restore goes wrong:
 
 ```bash
-sudo cp /etc/mirrorlist.pre-rollback.bak /etc/mirrorlist
+sudo cp /etc/pacman.d/mirrorlist.pre-rollback.bak /etc/pacman.d/mirrorlist
 ```
+
+(The `.bak` sits beside the *live* file — e.g. the mirrorlist backup is
+in `/etc/pacman.d/`, the fstab backup in `/etc/`.)
 
 For package rollbacks, `pacman -U` is atomic — either it fully
 succeeds or it fully fails. If it errors with "conflicts with
@@ -401,13 +448,20 @@ archward verify --snapshot <id>
 
 # Single-target rollback (reversible, safest)
 archward rollback config <id> <filename>
-archward rollback package <id> <pkg-name>
+archward rollback package <id> <pkg-name>      # critical.txt packages only
 
 # Bulk rollback (auto-takes pre-rollback snapshot)
 archward rollback all-configs <id>
 archward rollback all-packages <id>
-archward rollback all-packages <id> --confirm-boot-critical    # for boot-critical
+archward rollback all-packages <id> --confirm-boot-critical    # for glibc/systemd/openssl
                                                                 # then type YES on stdin
+
+# Reinstall packages removed since a snapshot
+archward rollback reinstall <id> [pkg ...] [--yes]
+
+# Cache policy (is rollback even possible?)
+archward cache status
+archward cache gaps
 
 # Pacnew triage
 archward pacnew list

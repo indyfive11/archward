@@ -14,6 +14,7 @@ import subprocess
 import threading
 
 from archward.events import EventBus
+from archward.locale_env import c_locale_env
 from archward.pacman.runner import PromptProvider, run_streaming
 from archward.privilege.sudo import SudoStrategy
 
@@ -52,7 +53,7 @@ class _PacmanLikeAdapter:
                 check=False,
                 capture_output=True,
                 text=True,
-                env={**__import__("os").environ, "LANG": "C"},
+                env=c_locale_env(),
                 timeout=60,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
