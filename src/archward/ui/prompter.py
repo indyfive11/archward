@@ -169,11 +169,24 @@ class GuiPrompter(QObject):
         return box.exec() == QMessageBox.StandardButton.Yes
 
     def _show_gate_dialog(self, gate: GateResult) -> bool:
+        # v0.4.18: WARNs are worded as warnings (they didn't "fail"), and
+        # gate.detail — the actual content being overridden, e.g. the unread
+        # Arch News items — is shown via the expandable Details section.
+        from archward.models.gate import GateStatus
+
+        is_warn = gate.status is GateStatus.WARN
         box = QMessageBox()
-        box.setWindowTitle(f"archward — gate {gate.name}")
+        if is_warn:
+            box.setWindowTitle(f"archward — warning: {gate.name}")
+            box.setText(f"Pre-update warning from '{gate.name}'.")
+            box.setInformativeText(f"{gate.message}\n\nProceed anyway?")
+        else:
+            box.setWindowTitle(f"archward — gate {gate.name}")
+            box.setText(f"Gate '{gate.name}' failed.")
+            box.setInformativeText(f"{gate.message}\n\nOverride and proceed?")
         box.setIcon(QMessageBox.Icon.Warning)
-        box.setText(f"Gate '{gate.name}' failed.")
-        box.setInformativeText(f"{gate.message}\n\nOverride and proceed?")
+        if gate.detail:
+            box.setDetailedText(gate.detail)
         box.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )

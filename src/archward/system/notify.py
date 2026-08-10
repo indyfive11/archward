@@ -7,7 +7,8 @@ early if not found.
 
 Notification urgency mirrors the severity of the RESULT:
   - SUCCESS / NEEDS_REVIEW          → low      (auto-dismiss)
-  - REBOOT_NEEDED / PACNEW_*        → normal   (user setting decides persistence)
+  - REBOOT_NEEDED / PACNEW_* /
+    ABORTED                         → normal   (user setting decides persistence)
   - VERIFY_FAILED / UPDATE_FAILED   → critical (persists until dismissed)
 """
 
@@ -34,6 +35,7 @@ _RESULT_NOTIFY: dict[str, tuple[str, str]] = {
     "RESULT:NEEDS_REVIEW": ("low", "Review needed"),
     "RESULT:REBOOT_NEEDED": ("normal", "Reboot required"),
     "RESULT:PACNEW_MERGE_NEEDED": ("normal", "Pacnew merge pending"),
+    "RESULT:ABORTED": ("normal", "Update aborted"),
     "RESULT:VERIFY_FAILED": ("critical", "Verify failed"),
     "RESULT:UPDATE_FAILED": ("critical", "Update failed"),
 }
@@ -96,10 +98,15 @@ def compose_completion(result) -> Notification | None:
         lines.append("After reboot: `archward verify`. If desktop fails, drop to tty1 (Ctrl+Alt+F2).")
     elif tag == "RESULT:PACNEW_MERGE_NEEDED":
         lines.append("New .pacnew files need review.")
+    elif tag == "RESULT:ABORTED":
+        lines.append(result.aborted_reason or "Run stopped before completing.")
     elif tag == "RESULT:VERIFY_FAILED":
         lines.append("Post-update verify reported failures.")
     elif tag == "RESULT:UPDATE_FAILED":
-        lines.append(result.aborted_reason or "pacman or pre-flight failed.")
+        lines.append(result.aborted_reason or "pacman failed.")
+        error_lines = getattr(result, "update_error_lines", ())
+        if error_lines:
+            lines.append(error_lines[-1])
 
     # Verify counts (if any).
     if summary.fail_count or summary.warn_count:

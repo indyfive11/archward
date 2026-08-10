@@ -48,6 +48,9 @@ subcommand: `archward --profile lab verify`).
 0  RESULT:SUCCESS / RESULT:PACNEW_MERGE_NEEDED / RESULT:NEEDS_REVIEW
 1  RESULT:UPDATE_FAILED / RESULT:VERIFY_FAILED
 2  RESULT:REBOOT_NEEDED  (informational; user must reboot)
+3  another archward instance is already running (lock contention)
+4  RESULT:ABORTED  (user declined, a gate refused, or the run was
+   cancelled — the update did not fail, archward chose not to proceed)
 ```
 
 ---
@@ -548,9 +551,9 @@ archward pacnew apply <path> --strategy=keep_ours|take_new|edit|leave
 
 | Strategy | Effect |
 |---|---|
-| `keep_ours` | Delete the `.pacnew`, keep the live file as-is. |
+| `keep_ours` | Delete the `.pacnew`, keep the live file as-is. A copy of the discarded `.pacnew` is parked in `~/.local/state/archward/pacnew_trash/` first (v0.4.18), so this can be undone. |
 | `take_new` | Replace the live file with the `.pacnew`, preserving the live file's ownership + mode (per the v0.4.1 atomic-apply fix; partial chown/chmod failure restores from a backup). |
-| `edit` | Open `$VISUAL` / `$EDITOR` on both files for a manual merge. |
+| `edit` | Open both files via `sudoedit` with `$VISUAL` / `$EDITOR` (v0.4.18 — the editor runs unprivileged, the write-back is elevated). |
 | `leave` | No-op (skip this file). |
 
 `--strategy` is required. Exit 1 if the apply fails (e.g. sudo

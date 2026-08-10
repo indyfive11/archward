@@ -23,6 +23,7 @@ _TAG_INFO = {
     "RESULT:REBOOT_NEEDED": ("info", "Reboot Needed"),
     "RESULT:PACNEW_MERGE_NEEDED": ("info", "Pacnew Merge Needed"),
     "RESULT:NEEDS_REVIEW": ("info", "Needs Review"),
+    "RESULT:ABORTED": ("neutral", "Aborted"),
     "RESULT:VERIFY_FAILED": ("danger", "Verify Failed"),
     "RESULT:UPDATE_FAILED": ("danger", "Update Failed"),
 }
@@ -127,8 +128,10 @@ class ResultBanner(QWidget):
         self._orphan_btn.setVisible(bool(self._orphans))
 
         # Rollback chip — show snapshot ID as a clickable link when available.
+        # Shown on UPDATE_FAILED too (v0.4.18): a failed update is exactly
+        # when the rollback point matters most.
         self._rollback_snapshot_id = result.snapshot_id
-        if result.snapshot_id and tag != "RESULT:UPDATE_FAILED":
+        if result.snapshot_id:
             self._rollback_btn.setText(f"rollback: {result.snapshot_id} →")
             self._rollback_btn.setVisible(True)
         else:
@@ -153,6 +156,10 @@ class ResultBanner(QWidget):
             bits.append("reboot required to activate kernel")
         if result.aborted_reason:
             bits.append(result.aborted_reason)
+        # Failed update: say WHY inline (v0.4.18) — the last pacman error
+        # line, not just "Update Failed" with the cause buried in the log.
+        if tag == "RESULT:UPDATE_FAILED" and result.update_error_lines:
+            bits.append(result.update_error_lines[-1])
 
         self._detail.setText("    ".join(bits))
         self.setVisible(True)

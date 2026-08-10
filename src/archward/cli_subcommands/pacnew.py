@@ -107,7 +107,7 @@ def cmd_apply(args, config_path: Path | None) -> int:
         print(f"  note: {pf.note}")
 
     try:
-        apply_action(pf, action, strategy)
+        info = apply_action(pf, action, strategy)
     except RuntimeError as e:
         print(f"FAIL: {e}", file=sys.stderr)
         return 1
@@ -115,5 +115,7 @@ def cmd_apply(args, config_path: Path | None) -> int:
         print(f"FAIL: {e}", file=sys.stderr)
         return 2
 
+    if info:
+        print(f"  {info}")
     print(f"applied: {action.value}")
     return 0

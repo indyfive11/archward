@@ -95,13 +95,18 @@ def preflight_checks(cfg: ConfigModel, bus: EventBus) -> list[GateResult]:
                 "this update may not work"
             )
             bus.emit_log(PHASE_PREFLIGHT, f"WARN cache-safety: {msg}")
+            # can_override=True unconditionally (v0.4.18): for a WARN this
+            # flag means "give the user a chance to bail", not "permit
+            # overriding a failure". Tying it to gates.allow_override
+            # inverted the setting — allow_override=false (strict) removed
+            # the prompt and proceeded straight into the risky run.
             results.append(
                 GateResult(
                     name="cache-safety",
                     status=GateStatus.WARN,
                     message=msg,
                     detail=policy.explanation,
-                    can_override=cfg.gates.allow_override,
+                    can_override=True,
                 )
             )
         elif (
@@ -120,7 +125,7 @@ def preflight_checks(cfg: ConfigModel, bus: EventBus) -> list[GateResult]:
                     status=GateStatus.WARN,
                     message=msg,
                     detail=policy.explanation,
-                    can_override=cfg.gates.allow_override,
+                    can_override=True,  # WARN bail-chance, not a failure override
                 )
             )
         else:
@@ -172,7 +177,7 @@ def preflight_checks(cfg: ConfigModel, bus: EventBus) -> list[GateResult]:
                     status=GateStatus.WARN,
                     message=msg,
                     detail=detail_lines,
-                    can_override=cfg.gates.allow_override,
+                    can_override=True,  # WARN bail-chance, not a failure override
                 )
             )
         else:

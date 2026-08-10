@@ -297,11 +297,14 @@ Apply a resolution.
 .I STRATEGY
 is one of:
 .BR keep_ours
-(discard the .pacnew),
+(discard the .pacnew \(em a copy is parked under the archward state dir
+first, so this can be undone),
 .BR take_new
 (replace the live file, preserving ownership + mode),
 .BR edit
-(open both in
+(open both via
+.B sudoedit
+with
 .BR $VISUAL / $EDITOR ),
 or
 .BR leave
@@ -317,6 +320,13 @@ RESULT:UPDATE_FAILED / RESULT:VERIFY_FAILED
 .TP
 .B 2
 RESULT:REBOOT_NEEDED (informational; user must reboot)
+.TP
+.B 3
+another archward instance is already running (lock contention)
+.TP
+.B 4
+RESULT:ABORTED (user declined, a gate refused, or the run was cancelled
+\(em the update did not fail, archward chose not to proceed)
 .SS Subcommands
 .TP
 .B 0

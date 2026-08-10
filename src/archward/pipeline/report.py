@@ -39,10 +39,40 @@ def derive_result(
     pacnew_count: int,
     was_dry_run: bool = False,
     pending_check_ok: bool = True,
+    aborted: bool = False,
 ) -> ReportSummary:
-    """Map pipeline state to a primary RESULT tag and secondary annotations."""
+    """Map pipeline state to a primary RESULT tag and secondary annotations.
 
-    # Highest-precedence: failure paths.
+    `aborted` (v0.4.18) marks runs the pipeline stopped deliberately before
+    completing — user declines (HIGH-risk, gate/WARN override), gate refusals,
+    pre-flight failures, and user cancellation. These map to RESULT:ABORTED
+    rather than RESULT:UPDATE_FAILED: nothing failed, archward just did not
+    proceed. UPDATE_FAILED is reserved for an actual failed pacman run (and
+    the no-summary defensive path).
+    """
+
+    # Highest-precedence: deliberate abort. A cancel can land AFTER a
+    # successful official update (the transaction is never killed), so
+    # reboot/pacnew secondaries still apply when the update went through.
+    if aborted:
+        update_was_applied = update_exit_code == 0
+        reboot_needed = update_was_applied and any(p.is_kernel for p in pending)
+        return ReportSummary(
+            tag="RESULT:ABORTED",
+            secondary_tags=tuple(
+                t
+                for t in (
+                    "RESULT:REBOOT_NEEDED" if reboot_needed else None,
+                    "RESULT:PACNEW_MERGE_NEEDED" if pacnew_count > 0 else None,
+                )
+                if t
+            ),
+            fail_count=0,
+            warn_count=0,
+            reboot_needed=reboot_needed,
+        )
+
+    # Failure paths.
     if preflight_failed:
         return ReportSummary(
             tag="RESULT:UPDATE_FAILED",
@@ -54,7 +84,13 @@ def derive_result(
     if update_exit_code is not None and update_exit_code != 0:
         return ReportSummary(
             tag="RESULT:UPDATE_FAILED",
-            secondary_tags=(),
+            secondary_tags=tuple(
+                t
+                for t in (
+                    "RESULT:PACNEW_MERGE_NEEDED" if pacnew_count > 0 else None,
+                )
+                if t
+            ),
             fail_count=(verify.fail_count if verify else 0),
             warn_count=(verify.warn_count if verify else 0),
             reboot_needed=False,

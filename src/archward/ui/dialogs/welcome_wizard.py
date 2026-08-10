@@ -9,7 +9,9 @@
   5. Summary / Finish
 
 On Finish: writes the named profile to disk, marks wizard_completed in
-QSettings, and sets result_path so the caller can switch to the new profile.
+QSettings, turns on remember-last-used pointing at the new profile (so the
+wizard's answers persist across launches), and sets result_path so the
+caller can switch to the new profile.
 """
 
 from __future__ import annotations
@@ -42,7 +44,11 @@ from archward.config.detect import (
 from archward.config.loader import merge_partial, write_config
 from archward.config.paths import profile_config_path, valid_profile_name
 from archward.ui.icon import archward_icon
-from archward.ui.persistent_state import set_wizard_completed
+from archward.ui.persistent_state import (
+    set_last_used_profile_path,
+    set_remember_last_profile,
+    set_wizard_completed,
+)
 from archward.ui.theme import brand_palette
 
 
@@ -400,7 +406,11 @@ class _SummaryPage(_Page):
         self._summary_lbl.setWordWrap(True)
         layout.addWidget(self._summary_lbl)
 
-        layout.addWidget(self.body("You can change any setting in Preferences at any time."))
+        layout.addWidget(self.body(
+            "This profile will load automatically on future launches "
+            "(Preferences → Profiles → \"Remember last-used profile\"). "
+            "You can change any setting in Preferences at any time."
+        ))
         layout.addStretch(1)
 
     def populate(
@@ -559,6 +569,11 @@ class WelcomeWizard(QDialog):
         path = profile_config_path(name)
         write_config(cfg, path)
         set_wizard_completed()
+        # Make the wizard's answers actually stick: without remember-last-used
+        # the next launch loads the untouched default config.toml and every
+        # choice made here silently reverts (the wizard writes a *profile*).
+        set_remember_last_profile(True)
+        set_last_used_profile_path(path)
         self.result_path = path
         self.accept()
 

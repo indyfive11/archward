@@ -713,6 +713,14 @@ class MainWindow(QMainWindow):
             self._status.showMessage("Pipeline failed unexpectedly — see log.")
             self._repaint_chrome()
             return
+        if result.config_rewritten:
+            # The pipeline rewrote the active config file (one-shot aur.skip
+            # reset) — reload so the next run doesn't use the stale model.
+            from archward.config.loader import load_config
+            try:
+                self.cfg = load_config(self.config_path)
+            except Exception:  # noqa: BLE001 — keep the in-memory cfg on parse failure
+                log.exception("could not reload config after pipeline rewrite")
         if result.summary:
             tag = result.summary.tag
             self._rail.set_status(

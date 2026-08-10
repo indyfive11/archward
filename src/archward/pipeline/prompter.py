@@ -90,10 +90,21 @@ class CliPrompter:
         return (answer in ("y", "yes")), []
 
     def confirm_gate_override(self, gate: GateResult) -> bool:
+        # v0.4.18: honest wording for WARNs (nothing "failed") and print the
+        # gate detail so the user sees what they're waving through.
+        from archward.models.gate import GateStatus
+
+        is_warn = gate.status is GateStatus.WARN
+        if gate.detail:
+            print(f"[{gate.name}]")
+            print(gate.detail)
+        prompt = (
+            f"Warning from {gate.name}: {gate.message}. Proceed anyway? [y/N] "
+            if is_warn
+            else f"Gate {gate.name} failed: {gate.message}. Override? [y/N] "
+        )
         try:
-            answer = input(
-                f"Gate {gate.name} failed: {gate.message}. Override? [y/N] "
-            ).strip().lower()
+            answer = input(prompt).strip().lower()
         except EOFError:
             return False
         return answer in ("y", "yes")

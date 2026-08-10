@@ -253,9 +253,10 @@ def _attach_pacnew_parser(subparsers) -> None:
     apply_p.add_argument(
         "--strategy", required=True,
         choices=["keep_ours", "take_new", "edit", "leave"],
-        help="What to do with the .pacnew: keep_ours discards the .pacnew, "
-        "take_new replaces the live file (preserving perms+owner), edit "
-        "opens $VISUAL/$EDITOR on both files, leave is a no-op.",
+        help="What to do with the .pacnew: keep_ours discards the .pacnew "
+        "(a copy is parked in the archward state dir first), take_new "
+        "replaces the live file (preserving perms+owner), edit opens both "
+        "files via sudoedit with $VISUAL/$EDITOR, leave is a no-op.",
     )
 
 
@@ -394,6 +395,23 @@ def _install_sigint_handler(cancel_event: threading.Event) -> None:
             )
 
     signal.signal(signal.SIGINT, handler)
+
+
+def _tty_prompt_provider(line: str, kind) -> str:
+    """PromptProvider for a real terminal (pacman.noconfirm=False, v0.4.18).
+
+    The runner's PTY path detects the prompt and calls this on the reader
+    loop; we re-present it on the controlling terminal and forward the
+    answer. An empty answer maps to the prompt's default response — the
+    runner treats "" as *cancel*, which is not what Enter-for-default means.
+    """
+    from archward.pacman.prompts import default_response
+
+    try:
+        answer = input(f"{line} ").strip()
+    except EOFError:
+        return default_response(kind)
+    return answer if answer else default_response(kind)
 
 
 def _detect_command(yes: bool, config_path) -> int:
@@ -547,6 +565,21 @@ def main(argv: list[str] | None = None) -> int:
     with acquire_lock():
         cfg, strategy, bus = setup_app(config_path=config_path)
         check_distro_or_exit(bus)
+        # pacman.noconfirm=False (v0.4.18): give pacman/helper prompts a real
+        # answer path. Previously the CLI silently ran the pipe path (stdin
+        # closed) and every prompt got its default answer — while the help
+        # text promised "approve manually in a terminal".
+        prompt_provider = None
+        if not cfg.pacman.noconfirm and mode is not Mode.DRY_RUN:
+            if sys.stdin.isatty():
+                prompt_provider = _tty_prompt_provider
+            else:
+                print(
+                    "archward: pacman.noconfirm=false but stdin is not a "
+                    "terminal — pacman prompts will receive their default "
+                    "answers.",
+                    file=sys.stderr,
+                )
         result = run_pipeline(
             cfg,
             strategy,
@@ -556,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
             no_aur=args.no_aur,
             cancel_event=cancel_event,
             config_path=config_path,
+            prompt_provider=prompt_provider,
             # The CLI already holds the lock via acquire_lock() above,
             # preserving its historical exit-code-3 contention behavior.
             acquire_instance_lock=False,
@@ -574,6 +608,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  + {sec}", flush=True)
     if result.aborted_reason:
         print(f"  reason: {result.aborted_reason}", flush=True)
+    if summary.tag == "RESULT:UPDATE_FAILED" and result.update_error_lines:
+        print("  pacman errors:", flush=True)
+        for ln in result.update_error_lines:
+            print(f"    {ln}", flush=True)
     if summary.fail_count or summary.warn_count:
         print(f"  verify: {summary.fail_count} FAIL / {summary.warn_count} WARN", flush=True)
     if result.aur and result.aur.failures:
@@ -605,10 +643,15 @@ def main(argv: list[str] | None = None) -> int:
     #   0 = SUCCESS / PACNEW_MERGE_NEEDED / NEEDS_REVIEW (warnings or info only)
     #   1 = UPDATE_FAILED / VERIFY_FAILED (any failure)
     #   2 = REBOOT_NEEDED (informational; user must act)
+    #   3 = another archward instance holds the lock (acquire_lock, above)
+    #   4 = ABORTED (v0.4.18 — user declined, gate refused, or cancelled;
+    #       distinct from failure: archward chose not to proceed)
     if summary.tag in ("RESULT:UPDATE_FAILED", "RESULT:VERIFY_FAILED"):
         return 1
     if summary.tag == "RESULT:REBOOT_NEEDED":
         return 2
+    if summary.tag == "RESULT:ABORTED":
+        return 4
     return 0
 
 

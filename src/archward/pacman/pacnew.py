@@ -116,30 +116,59 @@ def render_diff(orig: Path, new: Path, n_context: int = 3) -> str:
     )
 
 
-def apply_action(pacnew: PacnewFile, action: PacnewAction, strategy: SudoStrategy) -> None:
-    """Apply the user's chosen action to a pacnew file."""
+def pacnew_trash_dir() -> Path:
+    """Where discarded .pacnew files are parked by Keep Ours (v0.4.18)."""
+    from archward.config import paths
+
+    return paths.state_dir() / "pacnew_trash"
+
+
+def apply_action(pacnew: PacnewFile, action: PacnewAction, strategy: SudoStrategy) -> str | None:
+    """Apply the user's chosen action to a pacnew file.
+
+    Returns an optional informational message for the caller to surface
+    (currently only Keep Ours: where the discarded .pacnew was parked).
+    """
     from archward.pacman.runner import run_capture  # local import to avoid cycle
 
     if action is PacnewAction.LEAVE:
-        return
+        return None
 
     if action is PacnewAction.KEEP_OURS:
-        # Discard the .pacnew side.
+        # Discard the .pacnew side — but park a copy in the trash dir first
+        # (v0.4.18; previously an unrecoverable `sudo rm -f`). The copy may
+        # be root-owned; that's fine, it exists to be restorable.
+        trash = pacnew_trash_dir()
+        trash.mkdir(parents=True, exist_ok=True)
+        flat = str(pacnew.path).lstrip("/").replace("/", "_")
+        dest = trash / f"{datetime.now():%Y%m%d-%H%M%S}_{flat}"
+        code, _, err = run_capture(
+            ["cp", "-a", str(pacnew.path), str(dest)], strategy=strategy
+        )
+        if code != 0:
+            raise RuntimeError(f"cp -a (trash backup) failed: {err.strip()} — .pacnew not removed")
         code, _, err = run_capture(["rm", "-f", str(pacnew.path)], strategy=strategy)
         if code != 0:
             raise RuntimeError(f"rm failed: {err.strip()}")
-        return
+        return f"discarded .pacnew saved to {dest}"
 
     if action is PacnewAction.TAKE_NEW:
         _apply_take_new(pacnew, strategy)
-        return
+        return None
 
     if action is PacnewAction.EDIT:
+        # sudoedit (v0.4.18): the plain-$EDITOR invocation could read but not
+        # write /etc files unless archward ran as root. sudoedit elevates the
+        # write-back while the editor itself runs unprivileged, and honors
+        # SUDO_EDITOR — pinned to the user's $VISUAL/$EDITOR choice.
         editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vim"
-        # No sudo: editor invocation is user-driven; for /etc files the user is
-        # expected to either run archward as root or use a sudo-aware editor.
-        subprocess.run([editor, str(pacnew.original_path), str(pacnew.path)], check=False)
-        return
+        env = dict(os.environ, SUDO_EDITOR=editor)
+        subprocess.run(
+            ["sudoedit", str(pacnew.original_path), str(pacnew.path)],
+            check=False,
+            env=env,
+        )
+        return None
 
     raise ValueError(f"Unknown PacnewAction: {action}")
 

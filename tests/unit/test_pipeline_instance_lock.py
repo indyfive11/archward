@@ -72,7 +72,7 @@ def test_lock_contention_aborts_before_any_phase(tmp_path, monkeypatch):
     assert result.preflight_failed is True
     assert result.aborted_reason == "another archward instance is running"
     assert result.summary is not None
-    assert result.summary.tag == "RESULT:UPDATE_FAILED"
+    assert result.summary.tag == "RESULT:ABORTED"
 
 
 def test_acquire_instance_lock_false_skips_locking(tmp_path, monkeypatch):

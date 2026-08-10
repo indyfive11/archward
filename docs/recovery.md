@@ -217,13 +217,14 @@ archward pacnew diff /etc/sshd_config.pacnew
 Then resolve:
 
 ```bash
-# Keep your version, discard the .pacnew:
+# Keep your version, discard the .pacnew (a copy is parked in
+# ~/.local/state/archward/pacnew_trash/ so this can be undone):
 archward pacnew apply /etc/sshd_config --strategy=keep_ours
 
 # Replace your version with the upstream new (ownership + mode preserved):
 archward pacnew apply /etc/sshd_config --strategy=take_new
 
-# Open both in $EDITOR side-by-side:
+# Open both via sudoedit in $EDITOR side-by-side:
 archward pacnew apply /etc/sshd_config --strategy=edit
 ```
 

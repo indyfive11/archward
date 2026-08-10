@@ -70,7 +70,9 @@ HELP: dict[tuple[str, str], str] = {
     ("gates", "allow_override"): (
         "Whether failing recoverable gates (e.g. low disk) can be overridden. "
         "Off = strict; the update refuses to run. On = you'll be prompted to "
-        "proceed anyway in the CLI / a dialog in the GUI."
+        "proceed anyway in the CLI / a dialog in the GUI. Warnings (cache "
+        "safety, Arch News) always prompt regardless — this setting only "
+        "governs gate failures."
     ),
     ("gates", "skip_news_check"): (
         "Skip the Arch News pre-flight check. When OFF (default), archward "

@@ -1736,13 +1736,32 @@ class _ProfilesTab(QWidget):
         # Per-section validation errors fall back to defaults, but a wholly
         # unreadable file gets logged and we can surface a clearer message.
         try:
-            load_config(src)
+            imported_cfg = load_config(src)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(
                 self, "Import failed",
                 f"Could not parse {src} as an archward config:\n{e}",
             )
             return
+
+        # Security (v0.4.18): an imported profile can carry [hooks] — shell
+        # commands archward executes via `sh -c` on the next update run.
+        # Never accept those silently from a file of unknown origin.
+        hook_cmds = list(imported_cfg.hooks.pre_update) + list(imported_cfg.hooks.post_verify)
+        if hook_cmds:
+            listed = "\n".join(f"  {c}" for c in hook_cmds)
+            resp = QMessageBox.warning(
+                self,
+                "Profile contains shell hooks",
+                f"This profile defines {len(hook_cmds)} shell command(s) that "
+                "archward will execute during the next update run:\n\n"
+                f"{listed}\n\n"
+                "Only import hooks from a source you trust.\n\nImport anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return
 
         # Default the new profile name to the source file's stem so users
         # who exported and re-import a roundtrip get a sensible default.
@@ -1755,6 +1774,21 @@ class _ProfilesTab(QWidget):
         except ValueError as e:
             QMessageBox.warning(self, "Invalid name", str(e))
             return
+
+        # Overwrite confirm (v0.4.18): the name prompt lets a colliding name
+        # through when it equals the suggested default, which used to
+        # silently clobber the existing profile.
+        if target.exists():
+            resp = QMessageBox.question(
+                self,
+                "Overwrite profile?",
+                f"A profile named {name!r} already exists:\n{target}\n\n"
+                "Overwrite it with the imported file?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return
 
         target.parent.mkdir(parents=True, exist_ok=True)
         try:

@@ -6,6 +6,62 @@ All notable changes to **archward** are documented here. Format follows
 
 ## [Unreleased]
 
+### Added — UX honesty
+
+- **`RESULT:ABORTED`** — declining a HIGH-risk update, refusing a gate
+  override, a failed pre-flight, a failed pre-update hook, and cancelling a
+  run no longer masquerade as a red "Update Failed" with a critical
+  notification. They now report an honest neutral **Aborted** banner, a
+  normal-urgency notification, and a distinct CLI exit code (4). If the
+  cancel landed after a successful kernel update, the reboot-needed and
+  pacnew secondaries are still surfaced. `RESULT:UPDATE_FAILED` now means
+  what it says: pacman actually failed.
+- **Failed updates tell you why, and what survived** — on
+  `RESULT:UPDATE_FAILED` the banner/notification/CLI now show pacman's last
+  error lines instead of burying them in the raw log, the rollback chip is
+  shown (previously hidden in exactly the case it's needed most), and the
+  pacnew scan still runs — a failed `-Syu` can have installed packages and
+  dropped `.pacnew` files before dying.
+- **CLI honors `pacman.noconfirm = false`** — the CLI silently ran pacman
+  with stdin closed, so every `[Y/n]` / provider prompt got its default
+  answer while the help text promised "approve manually in a terminal".
+  Prompts detected on the PTY are now re-presented on the terminal (Enter
+  maps to the prompt's default, not cancel); non-TTY runs print an explicit
+  warning that defaults will be taken.
+
+### Fixed — UX honesty
+
+- **Setup-wizard answers actually persist** — the wizard wrote a named
+  profile but never arranged for it to load again, so on the second launch
+  every wizard choice silently reverted to defaults. Finishing the wizard
+  now turns on "remember last-used profile" pointing at the new profile
+  (and says so on the summary page).
+- **Gate-override dialogs tell the truth** — WARNs are worded as warnings
+  (nothing "failed"), the gate detail (e.g. the actual unread Arch News
+  items) is shown in the dialog / printed in the CLI, every overridable
+  pre-flight WARN gets its own prompt (previously only the first), and
+  every FAIL gate is inspected (previously overriding the first FAIL
+  silently skipped the rest).
+- **`gates.allow_override = false` no longer weakens protection** — the
+  strict setting removed the WARN bail-out prompt entirely and proceeded
+  straight into a rollback-unsafe run. WARN prompts now always appear;
+  `allow_override` governs only FAIL-gate overrides, as documented.
+- **One-shot `aur.skip` actually resets** — it was documented as "skip AUR
+  just for this run" but never cleared, silently skipping AUR forever while
+  "Enable AUR phase" stayed checked. It is now consumed at the end of the
+  run and written back to the active config.
+- **"Keep Ours" is confirmed and recoverable** — it was a one-click,
+  no-confirmation `sudo rm -f` of the `.pacnew`. The GUI now confirms, and
+  both GUI and CLI park a copy in `~/.local/state/archward/pacnew_trash/`
+  before removing.
+- **Pacnew edit strategy uses `sudoedit`** — the CLI's `--strategy edit`
+  ran `$EDITOR` unprivileged, which could read but not write `/etc` files.
+- **Profile import asks before overwriting** — importing a file whose name
+  matches an existing profile silently clobbered it.
+- **Profile import warns about embedded hooks** — an imported profile can
+  carry `[hooks]` shell commands that archward executes on the next update
+  run; the import dialog now lists them and asks for explicit consent.
+
 ### Added — cancel & lifecycle
 
 - **Cancel button in the toolbar** — a running update can finally be

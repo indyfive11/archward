@@ -2,7 +2,8 @@
 
 Each row exposes four actions:
   - View Diff  → DiffDialog (unified diff, syntax-highlighted)
-  - Keep Ours  → sudo rm <path>.pacnew
+  - Keep Ours  → confirm, park a copy in the pacnew trash dir, then
+                 sudo rm <path>.pacnew (v0.4.18 — recoverable)
   - Take New   → sudo cp -a orig orig.pre-archward.bak + sudo mv .pacnew → orig
                  + sudo chown + sudo chmod (preserves original ownership/mode)
   - Edit       → spawn meld / kdiff3 with sudo -A; sudoedit fallback; final
@@ -179,6 +180,22 @@ class PacnewView(QWidget):
         if self._strategy is None:
             self._missing_context()
             return
+        # Keep Ours discards the .pacnew — confirm first (v0.4.18; it used to
+        # be a one-click sudo rm). A copy is parked in the trash dir so the
+        # decision is reversible, and the dialog says so.
+        if action is PacnewAction.KEEP_OURS:
+            from archward.pacman.pacnew import pacnew_trash_dir
+            resp = QMessageBox.question(
+                self,
+                "Discard .pacnew?",
+                f"Discard the new version?\n\n{pacnew.path}\n\n"
+                f"A copy will be saved under {pacnew_trash_dir()} first, "
+                "so this can be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if resp != QMessageBox.StandardButton.Yes:
+                return
         self._log(f"applying {action.value} → {pacnew.path}")
         # Off-thread (v0.4.17): apply_action runs sudo rm/cp/mv — a cold sudo
         # timestamp pops askpass, which used to block the GUI thread here.
@@ -202,6 +219,9 @@ class PacnewView(QWidget):
             self._mark_status(item, "FAILED", status_palette().fail_fg)
             self._set_row_buttons_enabled(item, True)
             return
+        if isinstance(result, str):
+            # Informational message from apply_action (e.g. trash location).
+            self._log(result)
         self._mark_resolved(item, action)
 
     def _set_row_buttons_enabled(self, item: QTreeWidgetItem, enabled: bool) -> None:

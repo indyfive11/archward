@@ -79,7 +79,7 @@ def _wire_stub_phases(monkeypatch, calls: list[str], *, cancel_during_update=Non
         calls.append("official")
         if cancel_during_update is not None:
             cancel_during_update.set()
-        return 0
+        return pl.update_official.OfficialUpdateOutcome(exit_code=0)
 
     monkeypatch.setattr(pl.update_official, "run_official_update", _official)
     monkeypatch.setattr(
@@ -117,7 +117,7 @@ def test_cancel_during_official_update_skips_all_later_phases(monkeypatch):
     assert calls == ["snapshot", "official"]
     assert result.aborted_reason == "cancelled by user"
     assert result.summary is not None
-    assert result.summary.tag == "RESULT:UPDATE_FAILED"
+    assert result.summary.tag == "RESULT:ABORTED"
 
 
 def test_cancel_before_snapshot_returns_before_risk(monkeypatch):

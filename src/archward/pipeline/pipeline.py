@@ -61,6 +61,12 @@ class PipelineResult:
     summary: ReportSummary | None = None
     aborted_reason: str | None = None
     snapshot_id: str | None = None
+    # Last error lines from a failed `pacman -Syu`, for the result banner /
+    # notification / CLI report (v0.4.18 — previously buried in the raw log).
+    update_error_lines: tuple[str, ...] = ()
+    # True when the pipeline rewrote the active config file (one-shot
+    # aur.skip reset) so the GUI can reload its in-memory ConfigModel.
+    config_rewritten: bool = False
 
 
 def _ask_yes_no(prompt: str) -> bool:
@@ -93,6 +99,33 @@ def _dry_run_show_aur_pending(cfg: ConfigModel, bus: EventBus, *, no_aur: bool) 
     bus.emit_log("risk", f"AUR helper {helper.name}: {len(aur_pending)} update(s) pending:")
     for pkg, old, new in aur_pending:
         bus.emit_log("risk", f"  {pkg:36s} {old} -> {new}  [AUR]")
+
+
+def _reset_aur_skip(
+    cfg: ConfigModel, config_path: Path | None, bus: EventBus
+) -> tuple[ConfigModel, bool]:
+    """Persist aur.skip=False after the one-shot skip was consumed.
+
+    Returns (possibly-updated cfg, wrote_config). `config_path=None` writes
+    the default config.toml (same semantics as write_config).
+    """
+    from archward.config.loader import merge_partial, write_config
+
+    new_cfg = merge_partial(cfg, aur=cfg.aur.model_copy(update={"skip": False}))
+    try:
+        write_config(new_cfg, config_path)
+    except OSError as e:
+        bus.emit_log(
+            "update_aur",
+            f"WARN: could not reset one-shot aur.skip in config: {e} — "
+            "the AUR phase will stay skipped until you uncheck it.",
+        )
+        return cfg, False
+    bus.emit_log(
+        "update_aur",
+        "aur.skip (one-shot) consumed — reset to off for the next run.",
+    )
+    return new_cfg, True
 
 
 def _default_prompter(mode: Mode, auto_yes: bool) -> Prompter:
@@ -156,6 +189,7 @@ def run_pipeline(
                 verify=None,
                 pacnew_count=0,
                 was_dry_run=(mode is Mode.DRY_RUN),
+                aborted=True,
             )
             return result
         return _run_pipeline_impl(
@@ -197,12 +231,13 @@ def _run_pipeline_impl(
         bus.emit_log("pipeline", "Cancelled by user — skipping remaining phases.")
         result.aborted_reason = "cancelled by user"
         result.summary = derive_result(
-            preflight_failed=True,
+            preflight_failed=False,
             update_exit_code=result.update_exit_code,
             pending=result.pending,
             verify=None,
             pacnew_count=result.pacnew_count,
             was_dry_run=(mode is Mode.DRY_RUN),
+            aborted=True,
         )
         return result
 
@@ -218,34 +253,33 @@ def _run_pipeline_impl(
             verify=None,
             pacnew_count=0,
             was_dry_run=(mode is Mode.DRY_RUN),
+            aborted=True,
         )
         return result
 
-    # A pre-flight WARN (cache-safety, v0.4.4 F2) never hard-aborts, but
-    # in an interactive run we give the user an explicit chance to bail
-    # before we touch the system — rollback for THIS update may not work.
-    # In auto/dry-run we don't prompt (AutoNoPrompter would spuriously
-    # abort a WARN); it was already logged loudly.
+    # A pre-flight WARN (cache-safety, Arch News) never hard-aborts, but in
+    # an interactive run we give the user an explicit chance to bail before
+    # we touch the system. Every overridable WARN gets its own prompt
+    # (v0.4.18 — previously only the first was surfaced, so an Arch News
+    # WARN could be silently swallowed by a cache-safety one). In auto/
+    # dry-run we don't prompt (AutoNoPrompter would spuriously abort a
+    # WARN); they were already logged loudly.
     if mode is Mode.INTERACTIVE:
-        warn = next(
-            (
-                g
-                for g in preflight
-                if g.status is GateStatus.WARN and g.can_override
-            ),
-            None,
-        )
-        if warn is not None and not prompter.confirm_gate_override(warn):
-            result.aborted_reason = f"{warn.name}: {warn.message}"
-            result.summary = derive_result(
-                preflight_failed=True,
-                update_exit_code=None,
-                pending=[],
-                verify=None,
-                pacnew_count=0,
-                was_dry_run=(mode is Mode.DRY_RUN),
-            )
-            return result
+        for warn in preflight:
+            if warn.status is not GateStatus.WARN or not warn.can_override:
+                continue
+            if not prompter.confirm_gate_override(warn):
+                result.aborted_reason = f"{warn.name}: {warn.message}"
+                result.summary = derive_result(
+                    preflight_failed=True,
+                    update_exit_code=None,
+                    pending=[],
+                    verify=None,
+                    pacnew_count=0,
+                    was_dry_run=(mode is Mode.DRY_RUN),
+                    aborted=True,
+                )
+                return result
 
     # ── Snapshot ────────────────────────────────────────────────────────────
     snapshot = snapshot_phase.take_snapshot(cfg, strategy, bus)
@@ -255,20 +289,24 @@ def _run_pipeline_impl(
 
     # ── Gates ───────────────────────────────────────────────────────────────
     gate_results = gates_phase.run_gates(cfg, snapshot, bus)
-    if gates_phase.any_fail(gate_results):
-        fail = next(g for g in gate_results if g.status is GateStatus.FAIL)
+    # Every FAIL gate is inspected (v0.4.18 — previously only the first, so
+    # overriding a snapshot-age FAIL silently skipped a disk-space FAIL).
+    # Each one must be individually overridable AND overridden to proceed.
+    for fail in gate_results:
+        if fail.status is not GateStatus.FAIL:
+            continue
         if fail.can_override and mode is Mode.INTERACTIVE and prompter.confirm_gate_override(fail):
-            pass  # user accepted the override
-        else:
-            result.aborted_reason = f"gate {fail.name} failed: {fail.message}"
-            result.summary = derive_result(
-                preflight_failed=True,
-                update_exit_code=None,
-                pending=[],
-                verify=None,
-                pacnew_count=0,
-            )
-            return result
+            continue  # user accepted the override
+        result.aborted_reason = f"gate {fail.name} failed: {fail.message}"
+        result.summary = derive_result(
+            preflight_failed=True,
+            update_exit_code=None,
+            pending=[],
+            verify=None,
+            pacnew_count=0,
+            aborted=True,
+        )
+        return result
 
     if _cancelled():
         return _cancel_abort()
@@ -353,6 +391,7 @@ def _run_pipeline_impl(
                     pending=pending,
                     verify=None,
                     pacnew_count=0,
+                    aborted=True,
                 )
                 return result
             proceed, ignored = prompter.decide_high_risk(list(high))
@@ -364,6 +403,7 @@ def _run_pipeline_impl(
                     pending=pending,
                     verify=None,
                     pacnew_count=0,
+                    aborted=True,
                 )
                 return result
             if ignored:
@@ -387,25 +427,34 @@ def _run_pipeline_impl(
             pending=pending,
             verify=None,
             pacnew_count=0,
+            aborted=True,
         )
         return result
 
     # ── Update official ─────────────────────────────────────────────────────
     if pending:
-        update_code = update_official.run_official_update(
+        outcome = update_official.run_official_update(
             cfg, strategy, bus,
             ignore=list(result.deselected_packages),
             cancel_event=cancel_event,
             prompt_provider=prompt_provider,
         )
-        result.update_exit_code = update_code
-        if update_code != 0:
+        result.update_exit_code = outcome.exit_code
+        result.update_error_lines = outcome.error_lines
+        if outcome.exit_code != 0:
+            # Honesty on failure (v0.4.18): a failed -Syu may still have
+            # installed packages and dropped .pacnew files before dying, so
+            # the pacnew scan still runs. The error excerpt travels in the
+            # result so the banner/notification/CLI can show WHY it failed
+            # instead of burying pacman's message in the raw log.
+            pacnew_files = pacnew_phase.scan_pacnew(cfg, snapshot.meta.path, bus)
+            result.pacnew_count = len(pacnew_files)
             result.summary = derive_result(
                 preflight_failed=False,
-                update_exit_code=update_code,
+                update_exit_code=outcome.exit_code,
                 pending=pending,
                 verify=None,
-                pacnew_count=0,
+                pacnew_count=result.pacnew_count,
             )
             return result
 
@@ -416,6 +465,7 @@ def _run_pipeline_impl(
         return _cancel_abort()
 
     # ── Update AUR ──────────────────────────────────────────────────────────
+    aur_skip_was_set = cfg.aur.skip
     result.aur = update_aur.run_aur_update(
         cfg, strategy, bus,
         cancel_event=cancel_event,
@@ -423,6 +473,12 @@ def _run_pipeline_impl(
         prompt_provider=prompt_provider,
         pkgbuild_reviewer=pkgbuild_reviewer,
     )
+    if aur_skip_was_set:
+        # aur.skip is documented as a one-shot override ("skip AUR just for
+        # this run") but was never reset (v0.4.18) — it silently skipped AUR
+        # forever. Consume it now that the skip has been applied.
+        cfg, reset_ok = _reset_aur_skip(cfg, config_path, bus)
+        result.config_rewritten = result.config_rewritten or reset_ok
 
     if _cancelled():
         return _cancel_abort()
