@@ -4,6 +4,81 @@ All notable changes to **archward** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-08-13
+
+### Added — run history
+
+- **Per-run history records** — every pipeline run (GUI or CLI, including
+  dry runs, aborts, and even crashes) now writes a structured JSON record
+  to `~/.local/state/archward/runs/<run_id>.json`: result tag, per-phase
+  timeline with durations, the full package transaction with risk classes,
+  pacman error lines, AUR failures/quarantine, hook outcomes, pacnew count,
+  and the snapshot (rollback point) taken for the run. The document schema
+  is a documented public contract for scripting (additive-only within a
+  `schema_version`; see docs/cli.md). Lock-contention aborts — where
+  nothing ran — are the one exception.
+- **`archward history`** — new CLI subcommand: `history [list]` (bare
+  `archward history` defaults to list), `history show <run_id|latest>`,
+  each with `--json` (list emits summary rows; show dumps the full
+  document — the machine-readable surface that closes the long-deferred
+  `--json` request).
+- **GUI Run History** — Tools → Run History…: read-only browser with a
+  runs table and per-run detail pane.
+- **`general.keep_runs`** — retention for run records (default 100, 0
+  disables), exposed in Preferences → General.
+
+### Changed — internal structure (v0.5 pass)
+
+- **Typed event protocol** — pipeline events now carry explicit
+  `Phase`/`PhaseStatus` enums and frozen typed payload models end to end;
+  every emitter declares its status, and the GUI rail consumes the enum
+  instead of regex-classifying message prose (retires the rail-substring
+  bug class for good). Snapshot progress drives the Snapshot view through
+  typed progress events; `RESULT:` tag presentation (rail/banner/
+  notification) comes from one shared table. Verify checks gained a real
+  **SKIPPED** status — a check that could not run (offline, disabled,
+  nothing to assess) is no longer dressed as a PASS; the verify summary
+  line counts skips separately. Two intentional reporting fixes: an AUR
+  phase completing with quarantined packages held back now shows as PASS
+  with the holdback noted, and systems with no `linux*` kernel package no
+  longer emit a spurious `RESULT:REBOOT_NEEDED`.
+- **Config write discipline** — config writes are now read-modify-write:
+  unknown/plugin-owned TOML sections survive every save (restores the
+  documented plugin promise), sections that fell back to defaults are
+  never silently persisted over your file, and unattended writers
+  (services auto-prune, one-shot `aur.skip` reset) touch only their own
+  section. Schema-version machinery is in place: a config written by a
+  newer archward puts this one in read-only mode (clear warning, writers
+  refuse) instead of silently downgrading the file. Preferences warns at
+  open about unparseable/fallen-back/read-only configs. Duplicated
+  defaults between the model and defaults.py were unified (fixes a live
+  divergence in `risk.kernel_pattern_exclude` for partial `[risk]`
+  sections).
+- **Frozen plugin API** — new `archward.plugin_api` facade
+  (`API_VERSION = 1`) re-exporting the stable plugin surface
+  (`VerifyCheck`, `CheckStatus`, `ConfigModel`, `Snapshot`, entry-point
+  group + bucket constants). Old import paths keep working; docs and the
+  example plugin migrated.
+- **PTY prompt hardening** — interactive pacman/AUR prompt answers are now
+  delivered hold-and-settle: if output arrives while answering, the
+  response is held until the prompt settles instead of being fired blind
+  (closes a prompt pre-injection window *and* a stall when output
+  interleaved a real prompt). Terminal echo of typed answers is off; the
+  log shows a synthetic "(answer sent)" line instead of the raw response.
+- **Security hardening batch** — bounded network reads on all feed fetches
+  (news/AUR metadata 1 MiB, security advisories 8 MiB); the state
+  directory is private (0700); a `$SUDO_ASKPASS` outside system paths is
+  honored but warned about; `cache set-keep` refuses N < 1 uncondition-
+  ally (`--force` still allows exactly 1).
+- **Preferences split** — the 2,400-line preferences module is now a
+  package (one module per tab); the old import path remains as a
+  compatibility shim.
+- Tests: 788 → 862. New suites: pipeline orchestration matrix,
+  preferences round-trip over every tab, config write discipline,
+  security hardening, run history (recorder/writer/CLI incl. crash and
+  both-lock-arm paths); rail-status regex specs replaced by per-emitter
+  status pins.
+
 ## [0.4.18] — 2026-08-10
 
 ### Added — UX honesty
