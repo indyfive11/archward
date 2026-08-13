@@ -92,6 +92,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _attach_cache_parser(subparsers)
     _attach_gates_parser(subparsers)
     _attach_risk_parser(subparsers)
+    _attach_history_parser(subparsers)
 
     return p
 
@@ -357,6 +358,36 @@ def _attach_risk_parser(subparsers) -> None:
         "--no-aur", action="store_true",
         help="Skip the AUR pending-list query.",
     )
+
+
+def _attach_history_parser(subparsers) -> None:
+    """`archward history [list|show]` — inspect per-run history records."""
+    sp = subparsers.add_parser(
+        "history",
+        help="List and inspect run-history records (one JSON per pipeline run).",
+        description=(
+            "Every update run (GUI or CLI, including dry runs and aborts) "
+            "writes a structured record to ~/.local/state/archward/runs/. "
+            "Bare `archward history` lists them (the one subcommand with a "
+            "default action). Use `show <run_id> --json` for the full "
+            "machine-readable document."
+        ),
+    )
+    hist_sub = sp.add_subparsers(dest="history_action", metavar="<action>")
+
+    list_p = hist_sub.add_parser("list", help="List runs newest-first (default action).")
+    count_group = list_p.add_mutually_exclusive_group()
+    count_group.add_argument("--limit", type=int, default=20, metavar="N",
+                             help="Show at most N runs (default 20).")
+    count_group.add_argument("--all", action="store_true", help="Show every recorded run.")
+    list_p.add_argument("--json", action="store_true",
+                        help="Emit summary rows as JSON (full detail: `show <id> --json`).")
+
+    show_p = hist_sub.add_parser("show", help="Show one run in detail.")
+    show_p.add_argument("run_id", metavar="RUN_ID",
+                        help="Run id from `history list`, or `latest`.")
+    show_p.add_argument("--json", action="store_true",
+                        help="Dump the raw run document (the stable scripting surface).")
 
 
 def _resolve_config_path(profile: str | None):
@@ -744,6 +775,16 @@ def _dispatch_subcommand(args, config_path) -> int:
     if args.command == "risk":
         from archward.cli_subcommands import risk as cmd
         return cmd.cmd_risk(args, config_path)
+    if args.command == "history":
+        from archward.cli_subcommands import history as cmd
+        # Bare `archward history` defaults to list — deliberate exception to
+        # the missing-action convention (docs/cli.md).
+        if args.history_action in (None, "list"):
+            return cmd.cmd_list(args, config_path)
+        if args.history_action == "show":
+            return cmd.cmd_show(args, config_path)
+        print("archward history: unknown action — try `archward history --help`", file=sys.stderr)
+        return 2
     print(f"archward: unknown command {args.command!r}", file=sys.stderr)
     return 2
 

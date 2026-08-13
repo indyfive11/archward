@@ -60,7 +60,8 @@ def test_shim_and_package_share_objects() -> None:
 # section → field mutations a tab is expected to expose and persist.
 _MUTATIONS: dict[str, dict] = {
     "general": dict(keep_snapshots=99, keep_days=33, keep_min=4,
-                    after_snapshot=True, keep_logs=7, notify_on_completion=False),
+                    after_snapshot=True, keep_logs=7, keep_runs=55,
+                    notify_on_completion=False),
     "gates": dict(snapshot_max_age_minutes=123, min_disk_gb=42,
                   allow_override=False, skip_news_check=True),
     "risk": dict(high=("custompkg",), medium_patterns=("*-custom",),

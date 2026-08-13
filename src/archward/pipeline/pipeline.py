@@ -161,48 +161,69 @@ def run_pipeline(
     CLI locked and a GUI run could race a concurrent CLI update. The CLI
     passes False because it already holds the lock (its wrapper preserves
     the historical exit-code-3 contention behavior).
+
+    Run history: every run through here — BOTH lock arms — writes a
+    run-history record via RunRecorder, including crash paths (partial record
+    with the phases captured so far). Lock-contention aborts are the one
+    exception: nothing ran, the other instance owns the real run's record.
     """
-    if not acquire_instance_lock:
-        return _run_pipeline_impl(
-            cfg, strategy, bus, mode,
-            auto_yes=auto_yes, no_aur=no_aur, cancel_event=cancel_event,
-            prompter=prompter, config_path=config_path,
-            prompt_provider=prompt_provider, pkgbuild_reviewer=pkgbuild_reviewer,
-        )
+    from archward.pipeline import run_record
 
-    from archward.app import try_acquire_lock  # composition root; no import cycle
-
-    with try_acquire_lock() as acquired:
-        if not acquired:
-            result = PipelineResult()
-            bus.emit_start("preflight", "Pre-flight")
-            bus.emit_log(
-                "preflight",
-                "FAIL: another archward instance is running (instance lock held) "
-                "— refusing to start.",
-            )
-            bus.emit_result(
-                "preflight",
-                "FAIL: another archward instance is running",
-                PhaseStatus.FAIL,
-            )
-            result.preflight_failed = True
-            result.aborted_reason = "another archward instance is running"
-            result.summary = derive_result(
-                preflight_failed=True,
-                update_exit_code=None,
-                pending=[],
-                verify=None,
-                pacnew_count=0,
-                was_dry_run=(mode is Mode.DRY_RUN),
-                aborted=True,
+    recorder = run_record.RunRecorder(bus)
+    result: PipelineResult | None = None
+    error: BaseException | None = None
+    try:
+        if not acquire_instance_lock:
+            result = _run_pipeline_impl(
+                cfg, strategy, bus, mode,
+                auto_yes=auto_yes, no_aur=no_aur, cancel_event=cancel_event,
+                prompter=prompter, config_path=config_path,
+                prompt_provider=prompt_provider, pkgbuild_reviewer=pkgbuild_reviewer,
             )
             return result
-        return _run_pipeline_impl(
-            cfg, strategy, bus, mode,
-            auto_yes=auto_yes, no_aur=no_aur, cancel_event=cancel_event,
-            prompter=prompter, config_path=config_path,
-            prompt_provider=prompt_provider, pkgbuild_reviewer=pkgbuild_reviewer,
+
+        from archward.app import try_acquire_lock  # composition root; no import cycle
+
+        with try_acquire_lock() as acquired:
+            if not acquired:
+                recorder.discard()
+                result = PipelineResult()
+                bus.emit_start("preflight", "Pre-flight")
+                bus.emit_log(
+                    "preflight",
+                    "FAIL: another archward instance is running (instance lock held) "
+                    "— refusing to start.",
+                )
+                bus.emit_result(
+                    "preflight",
+                    "FAIL: another archward instance is running",
+                    PhaseStatus.FAIL,
+                )
+                result.preflight_failed = True
+                result.aborted_reason = "another archward instance is running"
+                result.summary = derive_result(
+                    preflight_failed=True,
+                    update_exit_code=None,
+                    pending=[],
+                    verify=None,
+                    pacnew_count=0,
+                    was_dry_run=(mode is Mode.DRY_RUN),
+                    aborted=True,
+                )
+                return result
+            result = _run_pipeline_impl(
+                cfg, strategy, bus, mode,
+                auto_yes=auto_yes, no_aur=no_aur, cancel_event=cancel_event,
+                prompter=prompter, config_path=config_path,
+                prompt_provider=prompt_provider, pkgbuild_reviewer=pkgbuild_reviewer,
+            )
+            return result
+    except BaseException as exc:
+        error = exc
+        raise
+    finally:
+        recorder.finalize(
+            cfg=cfg, mode=mode, no_aur=no_aur, result=result, error=error, bus=bus
         )
 
 

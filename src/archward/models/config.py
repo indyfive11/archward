@@ -17,6 +17,7 @@ class GeneralConfig(BaseModel):
     after_snapshot: bool = False
     log_dir: Path
     keep_logs: int = 20
+    keep_runs: int = 100  # run-history records under state_dir()/runs; 0 disables pruning
     notify_on_completion: bool = True
 
     @field_validator("snapshot_dir", "log_dir", mode="before")

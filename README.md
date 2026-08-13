@@ -202,6 +202,13 @@ archward aur pending
     List pending AUR updates via the configured helper (yay, paru, etc.)
     without snapshot overhead.
 
+archward history [list|show <id|latest>] [--json]
+    Inspect per-run history records — every pipeline run (GUI or CLI,
+    dry runs and aborts included) writes one JSON to
+    ~/.local/state/archward/runs/. `show <id> --json` dumps the full
+    machine-readable document (the stable scripting surface). The GUI
+    twin is Tools -> Run History.
+
 archward aur quarantine list
 archward aur quarantine clear [PKG] [--yes]
     Inspect or clear the AUR build quarantine list.

@@ -309,6 +309,30 @@ with
 or
 .BR leave
 (no-op).
+.SS archward history [list] [\-\-limit N | \-\-all] [\-\-json]
+List run-history records newest-first (one JSON per pipeline run \(em GUI
+or CLI, including dry runs, aborts, and crashes). Bare
+.B archward history
+defaults to
+.BR list .
+.B \-\-json
+emits summary rows; full detail lives behind
+.BR "show ID \-\-json" .
+Retention is automatic via
+.BR general.keep_runs
+(default 100; 0 disables pruning).
+.SS archward history show ID [\-\-json]
+Show one run in detail: result, per-phase timeline with durations, pacman
+error lines, AUR failures/quarantine, pacnew count.
+.I ID
+is a run id from
+.BR "history list" ,
+or
+.B latest
+for the newest run.
+.B \-\-json
+dumps the raw run document \(em the stable scripting surface; see
+docs/cli.md for the schema and its stability contract.
 .SH EXIT STATUS
 .SS Flag form
 .TP
@@ -343,7 +367,7 @@ unknown filename / package / pacnew action, no AUR helper found);
 warnings only (no FAIL)
 .TP
 .B 3
-snapshot not found or incomplete (missing
+snapshot or run record not found, or snapshot incomplete (missing
 .BR .timestamp )
 .SH FILES
 .TP
@@ -359,6 +383,12 @@ Per-update snapshots. Each is a timestamped directory.
 .TP
 .I ~/.local/state/archward/logs/archward.log
 Rotating run log. The post-reboot recovery breadcrumb is written here.
+.TP
+.I ~/.local/state/archward/runs/
+Per-run history records (one JSON per pipeline run). Browsed with
+.B archward history
+and the GUI's Tools \(-> Run History; pruned per
+.BR general.keep_runs .
 .TP
 .I ~/.local/state/archward/aur_quarantine.json
 AUR build quarantine state. Keyed by package name; tracks failure counts,

@@ -48,6 +48,11 @@ HELP: dict[tuple[str, str], str] = {
     ("general", "keep_logs"): (
         "Number of rotated log files to retain. Each archive caps at ~2 MB."
     ),
+    ("general", "keep_runs"): (
+        "Number of run-history records to retain (one small JSON per pipeline "
+        "run, under ~/.local/state/archward/runs — see Tools → Run History and "
+        "`archward history`). 0 disables pruning entirely."
+    ),
     ("general", "notify_on_completion"): (
         "Show a desktop notification when the pipeline finishes. Uses "
         "`notify-send` (libnotify) — silently disabled if not installed. "

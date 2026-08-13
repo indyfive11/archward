@@ -101,6 +101,9 @@ class _GeneralTab(_Tab):
         self._keep_min.setRange(0, 100)
         self._keep_logs = QSpinBox()
         self._keep_logs.setRange(1, 100)
+        self._keep_runs = QSpinBox()
+        self._keep_runs.setRange(0, 10000)
+        self._keep_runs.setSpecialValueText("disabled")
 
         self._notify_on_completion = QCheckBox("Show a desktop notification when the pipeline finishes")
         self._after_snapshot = QCheckBox("Take a snapshot after a successful verify pass")
@@ -120,6 +123,7 @@ class _GeneralTab(_Tab):
         form.addRow("", _field_with_help(self._after_snapshot, "general", "after_snapshot"))
         form.addRow("Log directory:", _field_with_help(_wrap(log_row), "general", "log_dir"))
         form.addRow("Keep N log files:", _field_with_help(self._keep_logs, "general", "keep_logs"))
+        form.addRow("Keep N run-history records:", _field_with_help(self._keep_runs, "general", "keep_runs"))
         form.addRow("", _field_with_help(self._notify_on_completion, "general", "notify_on_completion"))
 
     def _browse(self, target: QLineEdit) -> None:
@@ -134,6 +138,7 @@ class _GeneralTab(_Tab):
         self._keep_days.setValue(cfg.general.keep_days)
         self._keep_min.setValue(cfg.general.keep_min)
         self._keep_logs.setValue(cfg.general.keep_logs)
+        self._keep_runs.setValue(cfg.general.keep_runs)
         self._notify_on_completion.setChecked(cfg.general.notify_on_completion)
         self._after_snapshot.setChecked(cfg.general.after_snapshot)
 
@@ -146,5 +151,6 @@ class _GeneralTab(_Tab):
             keep_min=self._keep_min.value(),
             after_snapshot=self._after_snapshot.isChecked(),
             keep_logs=self._keep_logs.value(),
+            keep_runs=self._keep_runs.value(),
             notify_on_completion=self._notify_on_completion.isChecked(),
         )

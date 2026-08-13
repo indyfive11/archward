@@ -561,6 +561,85 @@ denied), exit 2 for an unknown action, exit 3 if no `.pacnew` exists.
 
 ---
 
+## `archward history`
+
+Every pipeline run — GUI or CLI, including dry runs, aborts, and even
+crashes — writes one JSON record to `~/.local/state/archward/runs/`.
+`archward history` is the TTY surface over those records; the GUI twin
+is Tools → Run History. Retention is automatic via `general.keep_runs`
+(default 100; `0` disables pruning).
+
+Bare `archward history` defaults to `list` — the one subcommand with a
+default action.
+
+Runs that only *display* a result without running (a second instance
+blocked by the instance lock) are not recorded. Standalone
+`archward verify` is not a pipeline run and writes no record.
+
+### `archward history list [--limit N | --all] [--json]`
+
+```
+run                          age  result                      duration  mode         snapshot
+2026-08-13_084022         2h ago  RESULT:UPDATE_FAILED             18s  interactive  2026-08-13_084023
+```
+
+`--json` emits summary rows only (`run_id`, `started`, `duration_s`,
+`mode`, `tag`, `fail_count`, `warn_count`, `snapshot_id`) — full detail
+lives behind `show <id> --json`.
+
+### `archward history show <run_id|latest> [--json]`
+
+Human-readable detail for one run: result, per-phase timeline with
+durations, pacman error lines, AUR failures/quarantine, pacnew count.
+`latest` resolves the newest run. The run's `snapshot_id` names the
+rollback point taken for that run — the snapshot itself may already be
+pruned (`keep_runs` outlives `keep_snapshots` deliberately; check
+`archward snapshot list`).
+
+`--json` dumps the raw document — **this is the stable scripting
+surface**:
+
+```
+schema_version    1 — increments only on a rename/removal/shape change.
+                  New fields may be ADDED without a bump: consumers must
+                  ignore unknown keys. (Separate namespace from
+                  config.toml's schema_version.)
+run_id            YYYY-MM-DD_HHMMSS (+ "-2" suffix on same-second runs).
+                  NOT the snapshot id — see the snapshot_id field.
+started/finished  timezone-aware local ISO-8601; duration_s float.
+mode              interactive | dry-run | auto        no_aur  bool
+result            {tag, secondary_tags, fail_count, warn_count,
+                  reboot_needed} — tag strings are the RESULT: contract.
+                  null only when the run crashed (see aborted_reason).
+aborted_reason    string | null ("exception: <Type>" on a crash)
+update_exit_code  int | null      update_error_lines  [string]
+snapshot_id       string | null   pacnew_count  int
+deselected_packages  [string]
+pending           [{name, old_version, new_version, source, risk,
+                  is_kernel, reason}]
+phases            ordered phase executions: [{phase, status, message,
+                  started, finished, duration_s}] — status/finished are
+                  null for a phase that never completed; an absent phase
+                  never started (unconfigured hooks, verify disabled, or
+                  the run aborted earlier). Phase names and statuses are
+                  the closed vocabularies from the event protocol
+                  (statuses: pass/warn/fail/skipped).
+verify            {fail_count, warn_count, skipped_count,
+                  checks: [{bucket, name, status, message, detail}]} | null
+aur               {exit_code, skipped, skip_reason,
+                  failures: [{package, last_lines}],   # last 20 lines
+                  quarantine: [{package, version, status, failure_count,
+                  retry_after, last_error}]} | null    # retry_after is UTC
+hooks             {pre: [...], post: [...]} of {command, status, exit_code}
+                  (status: pass/fail/timeout). Note: hook commands are
+                  your shell one-liners verbatim — they can embed secrets
+                  (e.g. webhook URLs). Records stay in the private
+                  (0700) state dir; mind what you paste into bug reports.
+config_rewritten  bool
+```
+
+---
+
 ## Subcommand exit-code summary
 
 ```
@@ -569,7 +648,7 @@ denied), exit 2 for an unknown action, exit 3 if no `.pacnew` exists.
 2  invalid args or refused (boot-critical without --confirm, unknown
    filename/package, unknown pacnew action, no AUR helper found);
    archward gates: warnings only (no FAIL)
-3  snapshot not found or incomplete
+3  snapshot / run record not found or incomplete
 ```
 
 ---

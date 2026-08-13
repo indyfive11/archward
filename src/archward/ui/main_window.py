@@ -422,6 +422,7 @@ class MainWindow(QMainWindow):
         # ── Tools menu ─────────────────────────────────────────────────────
         tools_menu = self.menuBar().addMenu("&Tools")
         tools_menu.addAction("Manage Orphan Packages…", lambda: self._open_orphan_manager([]))
+        tools_menu.addAction("Run History…", self._open_run_history)
 
         # ── Help menu ──────────────────────────────────────────────────────
         help_menu = self.menuBar().addMenu("&Help")
@@ -766,6 +767,15 @@ class MainWindow(QMainWindow):
         dlg = SnapshotBrowser(
             self.cfg, self.strategy, self.bus, select_id=snapshot_id, parent=self
         )
+        dlg.exec()
+        dlg.deleteLater()
+
+    def _open_run_history(self) -> None:
+        if self._run_state is not RunState.IDLE:
+            self._status.showMessage("Pipeline running — the current run appears here when it ends.")
+            return
+        from archward.ui.dialogs.run_history import RunHistoryDialog
+        dlg = RunHistoryDialog(parent=self)
         dlg.exec()
         dlg.deleteLater()
 

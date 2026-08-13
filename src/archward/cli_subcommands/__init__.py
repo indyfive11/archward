@@ -8,7 +8,7 @@ own output, and returning a Unix-style exit code:
     0 — success
     1 — operation failed (verify FAIL, pacman -U non-zero, etc.)
     2 — invalid args or refused (boot-critical without --confirm-...)
-    3 — snapshot not found
+    3 — snapshot / run record not found
 
 Subcommand modules MUST NOT import any GUI (PySide6) modules — the CLI
 is the recovery path when the GUI can't run.
