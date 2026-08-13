@@ -1,98 +1,298 @@
-"""Rail status classification from PHASE_RESULT messages (v0.4.16 fix).
+"""Per-emitter PHASE_RESULT statuses (v0.5 typed event protocol).
 
-The old substring match ("fail" in msg) turned the verify rail red on every
-run because "verify: 0 FAIL, 0 WARN" contains "fail".
+Replaces the old regex-classification spec: the rail no longer infers
+status from result-message prose — every emitter declares PhaseStatus
+explicitly. These tests pin each emitter's declared status to the same
+rail behavior the old classifier produced (parity), so a status change
+is a deliberate diff here, never an accidental wording side effect.
 """
 
-from archward.ui.main_window import _classify_result_message
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from archward.config.defaults import default_config
+from archward.events import (
+    EventBus,
+    PacnewFilesPayload,
+    PhaseEvent,
+    PhaseEventKind,
+    PhaseStatus,
+)
 
 
-class TestVerifyCounts:
-    def test_zero_fail_zero_warn_is_pass(self):
-        assert _classify_result_message("verify: 0 FAIL, 0 WARN") == "pass"
+class RecordingBus(EventBus):
+    def __init__(self) -> None:
+        super().__init__()
+        self.results: list[PhaseEvent] = []
+        self.subscribe(self._record)
 
-    def test_zero_fail_nonzero_warn_is_warn(self):
-        assert _classify_result_message("verify: 0 FAIL, 2 WARN") == "warn"
+    def _record(self, ev: PhaseEvent) -> None:
+        if ev.kind is PhaseEventKind.PHASE_RESULT:
+            self.results.append(ev)
 
-    def test_nonzero_fail_is_fail(self):
-        assert _classify_result_message("verify: 1 FAIL, 0 WARN") == "fail"
-
-    def test_nonzero_fail_and_warn_is_fail(self):
-        assert _classify_result_message("verify: 3 FAIL, 2 WARN") == "fail"
-
-
-class TestPipelineMessages:
-    def test_pacman_completed(self):
-        assert _classify_result_message("pacman -Syu completed") == "pass"
-
-    def test_pacman_failed(self):
-        assert _classify_result_message("pacman -Syu FAILED (exit 1)") == "fail"
-
-    def test_preflight_ok(self):
-        assert _classify_result_message("pre-flight OK") == "pass"
-
-    def test_preflight_failed(self):
-        assert _classify_result_message("pre-flight FAILED") == "fail"
-
-    def test_gates_passed(self):
-        assert _classify_result_message("gates passed") == "pass"
-
-    def test_gates_failed(self):
-        assert _classify_result_message("gates failed") == "fail"
-
-    def test_snapshot_complete(self):
-        assert _classify_result_message("Snapshot complete: 2026-07-31T12-00-00") == "pass"
-
-    def test_risk_summary(self):
-        assert _classify_result_message("12 pending: 1 HIGH, 3 MEDIUM, 8 LOW") == "pass"
-
-    def test_pacnew_none(self):
-        assert _classify_result_message("No new .pacnew files") == "pass"
+    def last(self) -> PhaseEvent:
+        assert self.results, "no PHASE_RESULT emitted"
+        return self.results[-1]
 
 
-class TestAurMessages:
-    def test_skipped(self):
-        assert _classify_result_message("skipped") == "skipped"
-
-    def test_skipped_no_helper(self):
-        assert _classify_result_message("skipped (no helper)") == "skipped"
-
-    def test_no_updates_pending(self):
-        assert _classify_result_message("no AUR updates pending") == "pass"
-
-    def test_completed(self):
-        assert _classify_result_message("AUR updates completed") == "pass"
-
-    def test_build_failures(self):
-        assert _classify_result_message("completed with 2 build failure(s)") == "fail"
-
-    def test_helper_failed_exit(self):
-        # Old message "helper exited 1" matched no keyword -> green rail on a
-        # failed helper; the message now says FAILED.
-        assert _classify_result_message("helper FAILED (exit 1)") == "fail"
-
-    def test_all_quarantined_skipped(self):
-        assert (
-            _classify_result_message("all 2 pending update(s) quarantined (skipped)")
-            == "skipped"
-        )
-
-    def test_review_aborted(self):
-        assert (
-            _classify_result_message("AUR phase aborted (user cancelled PKGBUILD review)")
-            == "fail"
-        )
+# ── protocol basics ───────────────────────────────────────────────────────
 
 
-class TestHookMessages:
-    def test_hooks_passed(self):
-        assert _classify_result_message("2 hook(s) passed") == "pass"
+def test_emit_result_requires_status() -> None:
+    with pytest.raises(TypeError):
+        EventBus().emit_result("verify", "message only")  # type: ignore[call-arg]
 
-    def test_hooks_warnings(self):
-        assert _classify_result_message("2 hook(s); 1 warning(s)") == "warn"
 
-    def test_hook_failed_abort(self):
-        assert (
-            _classify_result_message("hook FAILED, pipeline aborted (1 of 2 failing)")
-            == "fail"
-        )
+def test_unknown_phase_rejected() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        EventBus().emit_log("not-a-phase", "hi")
+
+
+def test_rollback_phase_accepted() -> None:
+    """The Snapshot Browser routes rollback logs through the live bus."""
+    bus = RecordingBus()
+    bus.emit_log("rollback", "restoring /etc/foo")  # must not raise
+
+
+def test_status_vocabulary_matches_rail_glyphs() -> None:
+    from archward.ui.phase_rail import _STATUS_GLYPHS
+
+    for status in PhaseStatus:
+        assert status.value in _STATUS_GLYPHS
+
+
+# ── pacnew phase ──────────────────────────────────────────────────────────
+
+
+def test_pacnew_none_is_pass(monkeypatch, tmp_path) -> None:
+    from archward.pipeline import pacnew_phase
+
+    monkeypatch.setattr(pacnew_phase, "find_pacnew_files", lambda since_epoch=None: [])
+    bus = RecordingBus()
+    pacnew_phase.scan_pacnew(default_config(), tmp_path, bus)
+    assert bus.last().status is PhaseStatus.PASS
+
+
+def test_pacnew_found_is_pass_with_payload(monkeypatch, tmp_path) -> None:
+    """Parity: files-need-attention kept the rail green pre-v0.5; the
+    attention surface is the Pacnew view + RESULT tag."""
+    from archward.pipeline import pacnew_phase
+
+    monkeypatch.setattr(
+        pacnew_phase, "find_pacnew_files",
+        lambda since_epoch=None: [Path("/etc/x.conf.pacnew")],
+    )
+    bus = RecordingBus()
+    files = pacnew_phase.scan_pacnew(default_config(), tmp_path, bus)
+    ev = bus.last()
+    assert ev.status is PhaseStatus.PASS
+    assert isinstance(ev.payload, PacnewFilesPayload)
+    assert len(ev.payload.files) == len(files) == 1
+
+
+# ── risk phase ────────────────────────────────────────────────────────────
+
+
+def _checkupdates_stub(ok: bool):
+    class _CU:
+        pass
+
+    cu = _CU()
+    cu.ok = ok
+    cu.error = None if ok else "checkupdates timed out"
+    cu.pending = []
+    return cu
+
+
+def test_risk_check_failure_is_warn_and_carries_error(monkeypatch) -> None:
+    from archward.events import RiskPendingPayload
+    from archward.pipeline import risk
+
+    monkeypatch.setattr(risk.pq, "checkupdates", lambda: _checkupdates_stub(False))
+    bus = RecordingBus()
+    risk.classify_pending(default_config(), bus)
+    ev = bus.last()
+    assert ev.status is PhaseStatus.WARN
+    assert isinstance(ev.payload, RiskPendingPayload)
+    assert ev.payload.check_error == "checkupdates timed out"
+
+
+def test_risk_clean_check_is_pass(monkeypatch) -> None:
+    from archward.pipeline import risk
+
+    monkeypatch.setattr(risk.pq, "checkupdates", lambda: _checkupdates_stub(True))
+    bus = RecordingBus()
+    risk.classify_pending(default_config(), bus)
+    assert bus.last().status is PhaseStatus.PASS
+
+
+def test_risk_preview_pinned_pass_even_with_replacements(monkeypatch) -> None:
+    """Preview is informational — replacements/conflicts must not flip the
+    rail (pre-v0.5 parity)."""
+    from archward.pipeline import risk
+
+    class _Preview:
+        package_count = 12
+        replacements = [("old", "new")]
+        conflicts = ["conflict warning"]
+
+    monkeypatch.setattr(risk.pq, "preview_transaction", lambda: _Preview())
+    bus = RecordingBus()
+    risk.preview_transaction(bus)
+    assert bus.last().status is PhaseStatus.PASS
+
+
+# ── official update ───────────────────────────────────────────────────────
+
+
+def _run_official(monkeypatch, code: int) -> RecordingBus:
+    from archward.pipeline import update_official
+
+    monkeypatch.setattr(
+        update_official, "run_streaming",
+        lambda *a, **k: (code, ["error: it broke"] if code else []),
+    )
+    bus = RecordingBus()
+
+    class _S:
+        def argv_prefix(self):
+            return []
+
+        def env(self):
+            return {}
+
+    update_official.run_official_update(default_config(), _S(), bus)
+    return bus
+
+
+def test_official_completed_is_pass(monkeypatch) -> None:
+    assert _run_official(monkeypatch, 0).last().status is PhaseStatus.PASS
+
+
+def test_official_failed_is_fail(monkeypatch) -> None:
+    assert _run_official(monkeypatch, 1).last().status is PhaseStatus.FAIL
+
+
+# ── gates ─────────────────────────────────────────────────────────────────
+
+
+def test_gates_pass_and_fail_statuses(monkeypatch) -> None:
+    from archward.pipeline import gates
+
+    class _Snap:
+        age_seconds = 0
+
+    monkeypatch.setattr(gates.disk, "free_gb", lambda _p: 500)
+    bus = RecordingBus()
+    gates.run_gates(default_config(), _Snap(), bus)
+    assert bus.last().status is PhaseStatus.PASS
+
+    monkeypatch.setattr(gates.disk, "free_gb", lambda _p: 0)
+    bus2 = RecordingBus()
+    gates.run_gates(default_config(), _Snap(), bus2)
+    assert bus2.last().status is PhaseStatus.FAIL
+
+
+# ── hooks ─────────────────────────────────────────────────────────────────
+
+
+def _run_hooks(commands: list[str], *, abort_on_failure: bool) -> RecordingBus:
+    from archward.models.config import HooksConfig
+    from archward.pipeline.hooks import HookRunner
+
+    bus = RecordingBus()
+    runner = HookRunner(
+        HooksConfig(
+            pre_update=tuple(commands),
+            fail_pipeline_on_error=abort_on_failure,
+        ),
+        bus,
+    )
+    runner.run_pre_update(None)
+    return bus
+
+
+def test_hooks_all_pass(tmp_path) -> None:
+    assert _run_hooks(["true"], abort_on_failure=False).last().status is PhaseStatus.PASS
+
+
+def test_hooks_warning(tmp_path) -> None:
+    assert _run_hooks(["false"], abort_on_failure=False).last().status is PhaseStatus.WARN
+
+
+def test_hooks_abort_is_fail(tmp_path) -> None:
+    assert _run_hooks(["false"], abort_on_failure=True).last().status is PhaseStatus.FAIL
+
+
+# ── AUR phase ─────────────────────────────────────────────────────────────
+
+
+def _aur_cfg(*, enabled: bool = True, skip: bool = False):
+    cfg = default_config()
+    return cfg.model_copy(
+        update={"aur": cfg.aur.model_copy(update={"enabled": enabled, "skip": skip})}
+    )
+
+
+def test_aur_force_skip_is_skipped() -> None:
+    from archward.pipeline import update_aur
+
+    bus = RecordingBus()
+    update_aur.run_aur_update(_aur_cfg(), None, bus, force_skip=True)
+    assert bus.last().status is PhaseStatus.SKIPPED
+
+
+def test_aur_no_helper_is_skipped(monkeypatch) -> None:
+    from archward.pipeline import update_aur
+
+    monkeypatch.setattr(update_aur, "discover", lambda prefs: None)
+    monkeypatch.setattr(update_aur, "_list_installed_aur", lambda: [])
+    bus = RecordingBus()
+    update_aur.run_aur_update(_aur_cfg(), None, bus)
+    assert bus.last().status is PhaseStatus.SKIPPED
+
+
+class _HelperStub:
+    name = "yay"
+
+    def __init__(self, pending, exit_code=0, captured=None):
+        self._pending = pending
+        self._exit = exit_code
+        self._captured = captured or []
+
+    def list_pending(self):
+        return self._pending
+
+    def run_update(self, **kw):
+        return self._exit, self._captured
+
+
+def test_aur_no_pending_is_pass(monkeypatch) -> None:
+    from archward.pipeline import update_aur
+
+    monkeypatch.setattr(update_aur, "discover", lambda prefs: _HelperStub([]))
+    bus = RecordingBus()
+    update_aur.run_aur_update(_aur_cfg(), None, bus)
+    assert bus.last().status is PhaseStatus.PASS
+
+
+def test_aur_helper_failure_is_fail(monkeypatch, tmp_path) -> None:
+    from archward.pipeline import update_aur
+
+    monkeypatch.setattr(
+        update_aur, "discover",
+        lambda prefs: _HelperStub([("somepkg", "1", "2")], exit_code=1),
+    )
+    monkeypatch.setattr(
+        "archward.aur.quarantine.AurQuarantine.state_path",
+        property(lambda self: tmp_path / "quarantine.json"),
+        raising=False,
+    )
+    bus = RecordingBus()
+    update_aur.run_aur_update(_aur_cfg(), None, bus)
+    assert bus.last().status is PhaseStatus.FAIL

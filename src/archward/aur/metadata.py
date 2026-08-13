@@ -14,6 +14,8 @@ import logging
 import time
 import urllib.error
 import urllib.request
+
+from archward.netutil import AUR_METADATA_MAX_BYTES, bounded_read
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -40,7 +42,7 @@ def fetch_aur_info(pkg: str) -> AurPackageInfo | None:
     log.debug("aur_metadata: fetching %s", url)
     try:
         with urllib.request.urlopen(url, timeout=_TIMEOUT) as resp:
-            data = json.loads(resp.read())
+            data = json.loads(bounded_read(resp, AUR_METADATA_MAX_BYTES))
     except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
         log.info("aur_metadata: fetch failed for %r (%s)", pkg, exc)
         return None

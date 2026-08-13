@@ -15,18 +15,12 @@ from archward.pipeline.pipeline import PipelineResult
 from archward.ui.theme import brand_palette, brand_success_colors, status_palette
 
 
-# Tag → (severity_key, human label). The actual bg/fg colors are pulled from
-# the active theme via status_palette() at render time so dark/light themes
-# render appropriately.
-_TAG_INFO = {
-    "RESULT:SUCCESS": ("success", "Success"),
-    "RESULT:REBOOT_NEEDED": ("info", "Reboot Needed"),
-    "RESULT:PACNEW_MERGE_NEEDED": ("info", "Pacnew Merge Needed"),
-    "RESULT:NEEDS_REVIEW": ("info", "Needs Review"),
-    "RESULT:ABORTED": ("neutral", "Aborted"),
-    "RESULT:VERIFY_FAILED": ("danger", "Verify Failed"),
-    "RESULT:UPDATE_FAILED": ("danger", "Update Failed"),
-}
+# Tag → (severity_key, human label), from the single TAG_META source (v0.5).
+# The actual bg/fg colors are pulled from the active theme via
+# status_palette() at render time so dark/light themes render appropriately.
+from archward.pipeline.report import TAG_META
+
+_TAG_INFO = {tag: (m.severity, m.human) for tag, m in TAG_META.items()}
 
 
 def _colors_for(severity: str) -> tuple[str, str]:

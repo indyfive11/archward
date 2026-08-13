@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from archward.events import EventBus
+from archward.events import EventBus, PhaseStatus
 from archward.models.aur import AurResult
 from archward.models.config import ConfigModel
 from archward.models.gate import GateStatus
@@ -106,21 +106,23 @@ def _reset_aur_skip(
 ) -> tuple[ConfigModel, bool]:
     """Persist aur.skip=False after the one-shot skip was consumed.
 
-    Returns (possibly-updated cfg, wrote_config). `config_path=None` writes
-    the default config.toml (same semantics as write_config).
+    Returns (updated cfg, wrote_config). The in-memory cfg is consumed
+    either way — a run must never re-apply a skip it already honored —
+    but when the surgical write is refused (read-only newer config,
+    unparseable file) the on-disk flag stays set, and we say so.
+    `config_path=None` targets the default config.toml.
     """
-    from archward.config.loader import merge_partial, write_config
+    from archward.config.loader import merge_partial, update_config_sections
 
-    new_cfg = merge_partial(cfg, aur=cfg.aur.model_copy(update={"skip": False}))
-    try:
-        write_config(new_cfg, config_path)
-    except OSError as e:
+    new_aur = cfg.aur.model_copy(update={"skip": False})
+    new_cfg = merge_partial(cfg, aur=new_aur)
+    if not update_config_sections(config_path, aur=new_aur):
         bus.emit_log(
             "update_aur",
-            f"WARN: could not reset one-shot aur.skip in config: {e} — "
-            "the AUR phase will stay skipped until you uncheck it.",
+            "WARN: could not reset one-shot aur.skip in the config file (see "
+            "log) — it stays set on disk and will skip AUR again next run.",
         )
-        return cfg, False
+        return new_cfg, False
     bus.emit_log(
         "update_aur",
         "aur.skip (one-shot) consumed — reset to off for the next run.",
@@ -179,7 +181,11 @@ def run_pipeline(
                 "FAIL: another archward instance is running (instance lock held) "
                 "— refusing to start.",
             )
-            bus.emit_result("preflight", "FAIL: another archward instance is running")
+            bus.emit_result(
+                "preflight",
+                "FAIL: another archward instance is running",
+                PhaseStatus.FAIL,
+            )
             result.preflight_failed = True
             result.aborted_reason = "another archward instance is running"
             result.summary = derive_result(

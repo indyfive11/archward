@@ -78,6 +78,17 @@ def discover_askpass(override: str = "") -> str | None:
         )
     env_askpass = os.environ.get("SUDO_ASKPASS", "")
     if env_askpass and os.access(env_askpass, os.X_OK):
+        # v0.5: still honored (rejecting would break the documented
+        # user-askpass pattern and enforces no real boundary — a same-uid
+        # attacker can edit config.toml anyway), but say so loudly when it
+        # points outside the system trees so a poisoned env var is visible.
+        if not env_askpass.startswith(("/usr/", "/usr/local/")):
+            log.warning(
+                "Honoring $SUDO_ASKPASS=%s from outside /usr — this binary "
+                "will receive your sudo password. Set privilege.askpass in "
+                "config.toml to pin a trusted path instead.",
+                env_askpass,
+            )
         return env_askpass
     for candidate in _ASKPASS_CANDIDATES:
         path = shutil.which(candidate)

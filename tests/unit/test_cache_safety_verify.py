@@ -51,7 +51,7 @@ def _stub_installed(monkeypatch, pairs: list[tuple[str, str]]) -> None:
 def test_no_snapshot_list_skips(tmp_path, cache_dir, monkeypatch) -> None:
     _stub_installed(monkeypatch, [("foo", "2-1")])
     chk = verify_phase._cache_safety_check(_snap(tmp_path, None))
-    assert chk.status is CheckStatus.PASS
+    assert chk.status is CheckStatus.SKIPPED
     assert "skipped" in chk.message
 
 
@@ -148,7 +148,7 @@ def test_scan_failure_skips_not_fails(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(verify_phase, "_call_with_timeout", boom)
     _stub_installed(monkeypatch, [("foo", "2-1")])
     chk = verify_phase._cache_safety_check(_snap(tmp_path, ["foo 1-1"]))
-    assert chk.status is CheckStatus.PASS
+    assert chk.status is CheckStatus.SKIPPED
     assert "skipped" in chk.message
 
 

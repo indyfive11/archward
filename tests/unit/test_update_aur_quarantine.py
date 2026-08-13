@@ -29,7 +29,7 @@ class _FakeBus(EventBus):
     def emit_start(self, phase: str, label: str) -> None:
         pass
 
-    def emit_result(self, phase: str, msg: str, *, payload=None) -> None:
+    def emit_result(self, phase: str, msg: str, status=None, payload=None) -> None:
         pass
 
 

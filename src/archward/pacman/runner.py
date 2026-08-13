@@ -32,6 +32,10 @@ from archward.privilege.sudo import SudoStrategy
 # headroom over the worst-case stdio latency without making the UI laggy.
 _PROMPT_IDLE_S = 0.2
 
+# How long the stream must stay quiet before a HELD prompt response (output
+# interleaved while the user was answering) is delivered to the child.
+_HELD_DELIVERY_QUIET_S = 1.0
+
 # Type of the optional GUI callback that resolves prompts. Signature is
 # (line, kind) → response_string. Returning "" cancels the subprocess.
 PromptProvider = Callable[[str, PromptKind], str]
@@ -159,6 +163,19 @@ def _run_pty(
     """
     master_fd, slave_fd = pty.openpty()
 
+    # v0.5 hardening: disable tty echo on the slave BEFORE the child spawns,
+    # so archward's own injected prompt responses never appear in the
+    # captured/logged stream (free-text typed into the prompt row used to
+    # echo back in cleartext). Child output is unaffected — echo only
+    # governs input reflection. A synthetic "(answer sent)" line keeps the
+    # post-mortem timeline legible without recording the content.
+    try:
+        attrs = termios.tcgetattr(slave_fd)
+        attrs[3] &= ~termios.ECHO  # lflags
+        termios.tcsetattr(slave_fd, termios.TCSANOW, attrs)
+    except (termios.error, OSError):  # pragma: no cover — non-tty edge
+        pass
+
     def _child_setup() -> None:  # pragma: no cover — runs in the forked child
         os.setsid()
         # Make the PTY the child's controlling terminal so the line
@@ -190,6 +207,15 @@ def _run_pty(
     buffer = ""
     cancelled = False
     decoder_errors = "replace"
+    # Held-response state (v0.5): when output arrives while the provider is
+    # blocked on the human, the answer is HELD, not written — writing into a
+    # child that isn't read-blocked pre-injects the answer into a later
+    # prompt. Delivery happens when the same-kind prompt reappears as the
+    # buffer tail, or after the stream has been quiet for a beat (the child
+    # is plausibly read-blocked on the prompt whose text got absorbed into a
+    # completed line by the interleaved output).
+    held_response: tuple[PromptKind, str] | None = None
+    last_data = time.monotonic()
 
     ladder = _CancelLadder(proc, master_fd, bus, phase)
 
@@ -216,6 +242,7 @@ def _run_pty(
                     break
                 if not chunk:
                     break
+                last_data = time.monotonic()
                 buffer += chunk.decode("utf-8", errors=decoder_errors)
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
@@ -229,6 +256,45 @@ def _run_pty(
                     # Already interrupting; keep escalating, never re-prompt.
                     ladder.escalate()
                     continue
+                # Held-response delivery. Same-kind prompt back in the buffer
+                # tail → the child re-displayed the question, deliver without
+                # re-asking. Empty buffer + quiet stream → the prompt's text
+                # was absorbed into a completed line by interleaved output
+                # while the child sat read-blocked; deliver so the run can't
+                # stall (pre-fix this path hung forever with the user's
+                # answer discarded).
+                if held_response is not None:
+                    held_kind, held_text = held_response
+                    if buffer:
+                        tail = strip_ansi(buffer.rstrip("\r"))
+                        tail_kind = detect_prompt(tail)
+                        if tail_kind is held_kind:
+                            held_response = None
+                            buffer = ""
+                            payload = held_text if held_text.endswith("\n") else held_text + "\n"
+                            try:
+                                os.write(master_fd, payload.encode("utf-8"))
+                            except OSError:
+                                break
+                            bus.emit_log(phase, "(answer sent)")
+                            continue
+                        if tail_kind is not None:
+                            # A different prompt appeared — the held answer no
+                            # longer applies; fall through to ask about it.
+                            held_response = None
+                        else:
+                            continue  # mid-line output; keep holding
+                    elif time.monotonic() - last_data >= _HELD_DELIVERY_QUIET_S:
+                        held_response = None
+                        payload = held_text if held_text.endswith("\n") else held_text + "\n"
+                        try:
+                            os.write(master_fd, payload.encode("utf-8"))
+                        except OSError:
+                            break
+                        bus.emit_log(phase, "(answer sent after output interruption)")
+                        continue
+                    else:
+                        continue  # waiting for the quiet threshold
                 if not buffer:
                     continue
                 cleaned_buf = strip_ansi(buffer.rstrip("\r"))
@@ -251,12 +317,31 @@ def _run_pty(
                     cancelled = True
                     ladder.escalate()
                     continue
+                # Drain check (v0.5): the provider can block on a human for
+                # minutes. If the child produced output in that window, the
+                # child wasn't (only) waiting on this prompt — writing now
+                # would risk pre-injecting the answer into a LATER prompt.
+                # HOLD the answer; the idle branch delivers it when the same
+                # prompt reappears or the stream goes quiet.
+                try:
+                    drained, _, _ = select.select([master_fd], [], [], 0)
+                except (OSError, ValueError):
+                    break
+                if master_fd in drained:
+                    held_response = (kind, response)
+                    bus.emit_log(
+                        phase,
+                        "(output arrived while answering — holding the response "
+                        "until the prompt settles)",
+                    )
+                    continue
                 buffer = ""
                 payload = response if response.endswith("\n") else response + "\n"
                 try:
                     os.write(master_fd, payload.encode("utf-8"))
                 except OSError:
                     break
+                bus.emit_log(phase, "(answer sent)")
 
         # Flush any final partial-line buffer
         if buffer:

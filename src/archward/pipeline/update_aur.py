@@ -22,7 +22,7 @@ from typing import Protocol
 
 from archward.aur.helper import AurHelper, discover
 from archward.aur.quarantine import AurQuarantine, QuarantineAction, _classify_error
-from archward.events import EventBus
+from archward.events import EventBus, PhaseStatus
 from archward.models.aur import AurResult, BuildFailure, QuarantineActiveEntry, QuarantineSnapshot
 from archward.models.config import ConfigModel
 from archward.pacman.runner import PromptProvider
@@ -120,7 +120,7 @@ def run_aur_update(
     if force_skip or not cfg.aur.enabled or cfg.aur.skip:
         reason = "skipped by --no-aur / cfg.aur.skip" if force_skip or cfg.aur.skip else "cfg.aur.enabled=false"
         bus.emit_log(PHASE, f"AUR phase skipped: {reason}")
-        bus.emit_result(PHASE, "skipped")
+        bus.emit_result(PHASE, "skipped", PhaseStatus.SKIPPED)
         return AurResult(exit_code=0, failures=(), skipped=True, skip_reason=reason)
 
     helper = _resolve_helper(cfg)
@@ -136,7 +136,7 @@ def run_aur_update(
             bus.emit_log(PHASE, f"Currently installed AUR / foreign packages ({len(installed)}):")
             for name, version in installed:
                 bus.emit_log(PHASE, f"  {name:36s} {version}")
-        bus.emit_result(PHASE, "skipped (no helper)")
+        bus.emit_result(PHASE, "skipped (no helper)", PhaseStatus.SKIPPED)
         return AurResult(
             exit_code=0,
             failures=(),
@@ -148,7 +148,7 @@ def run_aur_update(
     pending = helper.list_pending()
     bus.emit_log(PHASE, f"{len(pending)} AUR update(s) pending")
     if not pending:
-        bus.emit_result(PHASE, "no AUR updates pending")
+        bus.emit_result(PHASE, "no AUR updates pending", PhaseStatus.PASS)
         return AurResult(exit_code=0, failures=(), skipped=False)
 
     for pkg, old, new in pending:
@@ -204,6 +204,7 @@ def run_aur_update(
         bus.emit_result(
             PHASE,
             f"all {len(quarantine_ignored)} pending update(s) quarantined (skipped)",
+            PhaseStatus.SKIPPED,
         )
         return AurResult(
             exit_code=0,
@@ -224,7 +225,7 @@ def run_aur_update(
                 continue  # already handled
             if cancel_event is not None and cancel_event.is_set():
                 bus.emit_log(PHASE, "Cancellation requested — aborting AUR phase.")
-                bus.emit_result(PHASE, "AUR phase aborted (cancelled)")
+                bus.emit_result(PHASE, "AUR phase aborted (cancelled)", PhaseStatus.FAIL)
                 return AurResult(
                     exit_code=130,
                     failures=(),
@@ -233,7 +234,7 @@ def run_aur_update(
                 )
             if pkgbuild_reviewer.cancel_all_requested():
                 bus.emit_log(PHASE, "PKGBUILD review cancelled by user — aborting AUR phase.")
-                bus.emit_result(PHASE, "AUR phase aborted (user cancelled PKGBUILD review)")
+                bus.emit_result(PHASE, "AUR phase aborted (user cancelled PKGBUILD review)", PhaseStatus.FAIL)
                 return AurResult(
                     exit_code=130,
                     failures=(),
@@ -246,7 +247,7 @@ def run_aur_update(
                 bus.emit_log(PHASE, f"  rejected: {pkg} (added to --ignore)")
         if pkgbuild_reviewer.cancel_all_requested():
             bus.emit_log(PHASE, "PKGBUILD review cancelled by user — aborting AUR phase.")
-            bus.emit_result(PHASE, "AUR phase aborted (user cancelled PKGBUILD review)")
+            bus.emit_result(PHASE, "AUR phase aborted (user cancelled PKGBUILD review)", PhaseStatus.FAIL)
             return AurResult(
                 exit_code=130,
                 failures=(),
@@ -308,11 +309,14 @@ def run_aur_update(
     n_quarantined = len(quarantine_ignored)
     qsuffix = f" — {n_quarantined} quarantined (skipped)" if n_quarantined else ""
     if exit_code == 0 and not failures:
-        bus.emit_result(PHASE, f"AUR updates completed{qsuffix}")
+        # Deliberate v0.5 divergence: with a quarantine suffix present the old
+        # regex classified this "skipped"; PASS is the truth — the run completed,
+        # quarantined packages are itemized in the log and quarantine snapshot.
+        bus.emit_result(PHASE, f"AUR updates completed{qsuffix}", PhaseStatus.PASS)
     elif failures:
-        bus.emit_result(PHASE, f"completed with {len(failures)} build failure(s){qsuffix}")
+        bus.emit_result(PHASE, f"completed with {len(failures)} build failure(s){qsuffix}", PhaseStatus.FAIL)
     else:
-        bus.emit_result(PHASE, f"helper FAILED (exit {exit_code}){qsuffix}")
+        bus.emit_result(PHASE, f"helper FAILED (exit {exit_code}){qsuffix}", PhaseStatus.FAIL)
 
     return AurResult(
         exit_code=exit_code,

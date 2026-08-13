@@ -6,7 +6,7 @@ import logging
 import threading
 from dataclasses import dataclass
 
-from archward.events import EventBus
+from archward.events import EventBus, PhaseStatus
 from archward.models.config import ConfigModel
 from archward.pacman.runner import PromptProvider, pacman_argv, run_streaming
 from archward.privilege.sudo import SudoStrategy
@@ -71,7 +71,7 @@ def run_official_update(
         prompt_provider=prompt_provider if not cfg.pacman.noconfirm else None,
     )
     if code == 0:
-        bus.emit_result(PHASE, "pacman -Syu completed")
+        bus.emit_result(PHASE, "pacman -Syu completed", PhaseStatus.PASS)
         return OfficialUpdateOutcome(exit_code=0)
-    bus.emit_result(PHASE, f"pacman -Syu FAILED (exit {code})", payload={"exit_code": code})
+    bus.emit_result(PHASE, f"pacman -Syu FAILED (exit {code})", PhaseStatus.FAIL)
     return OfficialUpdateOutcome(exit_code=code, error_lines=extract_error_lines(captured))

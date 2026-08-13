@@ -20,7 +20,6 @@ HIGH-risk approval and gate-override use GuiPrompter (BlockingQueuedConnection).
 from __future__ import annotations
 
 import logging
-import re
 import threading
 from enum import Enum
 from pathlib import Path
@@ -41,15 +40,23 @@ from PySide6.QtWidgets import (
 )
 
 from archward.app import build_config, build_sudo_strategy
-from archward.events import EventBus, PhaseEvent, PhaseEventKind
+from archward.events import (
+    EventBus,
+    GateResultsPayload,
+    HookResultsPayload,
+    PacnewFilesPayload,
+    PhaseEvent,
+    PhaseEventKind,
+    RiskPendingPayload,
+    SnapshotDonePayload,
+    SnapshotProgressPayload,
+    TransactionPreviewPayload,
+    VerifyResultPayload,
+)
 from archward.logging_setup import setup_logging
 from archward.models.config import ConfigModel
-from archward.models.gate import GateResult
-from archward.models.hook import HookResult
-from archward.models.pacnew import PacnewFile
-from archward.models.update import PendingUpdate
-from archward.models.verify import VerifyResult
 from archward.pipeline.pipeline import Mode, PipelineResult, run_pipeline
+from archward.pipeline.report import TAG_META
 from archward.privilege.sudo import SudoStrategy
 from archward.system import notify
 from archward.system.distro import detect_distro
@@ -90,20 +97,8 @@ _PHASE_TO_VIEW = {
     "hooks_post": "verify",
 }
 
-# Zero counts are not failures: "verify: 0 FAIL, 2 WARN" must not read as a fail.
-_ZERO_COUNT = re.compile(r"\b0 (?:fail|warn)\w*")
-
-
-def _classify_result_message(message: str) -> str:
-    """Map a PHASE_RESULT message to a rail status (fail/skipped/warn/pass)."""
-    msg = _ZERO_COUNT.sub("", message.lower())
-    if re.search(r"\bfail", msg) or "abort" in msg:
-        return "fail"
-    if re.search(r"\bskip", msg):
-        return "skipped"
-    if re.search(r"\bwarn", msg):
-        return "warn"
-    return "pass"
+# v0.5: rail status comes from the emitter-declared PhaseEvent.status enum;
+# the old regex classification of result-message prose is gone.
 
 
 class RunState(Enum):
@@ -630,71 +625,58 @@ class MainWindow(QMainWindow):
         elif ev.kind is PhaseEventKind.PHASE_LOG:
             msg = ev.message or ""
             self._log.append_line(msg)
-            # Snapshot step progress — parse "[N/6] StepName".
-            if ev.phase == "snapshot" and len(msg) > 5 and msg[0] == "[" and "]" in msg:
-                try:
-                    bracket = msg.index("]")
-                    n_total = msg[1:bracket]
-                    if "/" in n_total:
-                        idx = int(n_total.split("/")[0])
-                        self._snapshot_step = idx
-                        self._views["snapshot"].note_step(idx)
-                except ValueError:
-                    pass
             # Update stream view for update_*/pacnew live output.
             if ev.phase in ("update_official", "update_aur"):
                 self._views["update"].append(msg)
 
+        elif ev.kind is PhaseEventKind.PHASE_PROGRESS:
+            # Typed progress (v0.5) — the human log line for the same step
+            # arrives separately as PHASE_LOG; this drives widgets only.
+            if isinstance(ev.payload, SnapshotProgressPayload):
+                self._snapshot_step = ev.payload.step
+                self._views["snapshot"].note_step(ev.payload.step)
+
         elif ev.kind is PhaseEventKind.PHASE_RESULT:
-            self._rail.set_status(ev.phase, _classify_result_message(ev.message or ""))
+            if ev.status is not None:
+                self._rail.set_status(ev.phase, ev.status.value)
             self._log.append_line(f"  → {ev.message or ''}")
             self._absorb_payload(ev)
 
     def _absorb_payload(self, ev: PhaseEvent) -> None:
-        """Push rich payload data into the appropriate view (audit-shaped data, not log strings)."""
-        if ev.payload is None:
+        """Route a typed PHASE_RESULT payload to its view.
+
+        Dispatch is on (payload type, phase) — hooks and gates payloads are
+        shared shapes routed by which phase emitted them. A payload model
+        with no branch here is simply not rendered (the models are frozen
+        and carried by reference; no re-validation round trip).
+        """
+        p = ev.payload
+        if p is None:
             return
-        if ev.phase in ("preflight", "gates") and "results" in ev.payload:
-            results = [GateResult.model_validate(r) for r in ev.payload["results"]]
-            # Both preflight and gates render into the same view; preflight clears
-            # it then gates appends rather than overwrites? For Phase 5 simplicity,
-            # the most recent set replaces — preflight's single check stays visible
-            # until gates fires, then gates' two checks replace.
-            existing = (
-                self._views["gates"]._tree.topLevelItemCount()  # type: ignore[attr-defined]
-                if ev.phase == "gates"
-                else 0
-            )
-            if existing:
-                # Append gates results below preflight (rebuild full list).
-                # Simplest path: re-show only gates results for the gates phase.
-                self._views["gates"].set_results(results)
-            else:
-                self._views["gates"].set_results(results)
-        elif ev.phase == "snapshot":
+        if isinstance(p, GateResultsPayload):
+            self._views["gates"].set_results(list(p.results))
+        elif isinstance(p, SnapshotDonePayload):
             # Snapshot result fires after all steps — mark all complete.
             self._views["snapshot"].mark_complete()
-        elif ev.phase == "risk" and "pending" in ev.payload:
-            pending = [PendingUpdate.model_validate(p) for p in ev.payload["pending"]]
-            self._views["risk"].set_pending(pending)
-        elif ev.phase == "risk" and "package_count" in ev.payload:
-            # Transaction-preview result event.
+        elif isinstance(p, RiskPendingPayload):
+            self._views["risk"].set_pending(list(p.pending))
+            if p.check_error:
+                # Previously silently discarded (v0.5 fix): the user saw an
+                # empty risk table with no explanation when checkupdates broke.
+                self._views["risk"].set_check_error(p.check_error)
+        elif isinstance(p, TransactionPreviewPayload):
             self._views["risk"].set_preview_banner(
-                ev.payload.get("replacement_count", 0),
-                ev.payload.get("conflict_count", 0),
+                p.replacement_count, p.conflict_count
             )
-        elif ev.phase == "pacnew" and "files" in ev.payload:
-            files = [PacnewFile.model_validate(f) for f in ev.payload["files"]]
-            self._views["pacnew"].set_files(files)
-        elif ev.phase == "verify" and "result" in ev.payload:
-            vr = VerifyResult.model_validate(ev.payload["result"])
-            self._views["verify"].set_result(vr)
-        elif ev.phase == "hooks_pre" and "hook_results" in ev.payload:
-            hooks = tuple(HookResult.model_validate(h) for h in ev.payload["hook_results"])
-            self._views["verify"].set_pre_hooks(hooks)
-        elif ev.phase == "hooks_post" and "hook_results" in ev.payload:
-            hooks = tuple(HookResult.model_validate(h) for h in ev.payload["hook_results"])
-            self._views["verify"].set_post_hooks(hooks)
+        elif isinstance(p, PacnewFilesPayload):
+            self._views["pacnew"].set_files(list(p.files))
+        elif isinstance(p, VerifyResultPayload):
+            self._views["verify"].set_result(p.result)
+        elif isinstance(p, HookResultsPayload):
+            if ev.phase == "hooks_pre":
+                self._views["verify"].set_pre_hooks(p.results)
+            else:
+                self._views["verify"].set_post_hooks(p.results)
 
     # ── Completion ─────────────────────────────────────────────────────────
 
@@ -723,12 +705,8 @@ class MainWindow(QMainWindow):
                 log.exception("could not reload config after pipeline rewrite")
         if result.summary:
             tag = result.summary.tag
-            self._rail.set_status(
-                "result",
-                "pass" if tag == "RESULT:SUCCESS" else
-                "fail" if tag in ("RESULT:UPDATE_FAILED", "RESULT:VERIFY_FAILED") else
-                "warn",
-            )
+            meta = TAG_META.get(tag)
+            self._rail.set_status("result", meta.rail_status if meta else "warn")
             self._status.showMessage(f"Done. {tag}")
             self._log.append_line("")
             self._log.append_line(f"=== {tag} ===")

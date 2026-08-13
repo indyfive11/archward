@@ -496,11 +496,11 @@ archward cache set-keep N [--force]
 | Arg / Flag | Effect |
 |---|---|
 | `N` | Versions to keep per package. Minimum 2 (enforced). |
-| `--force` | Allow N < 2 (not recommended). |
+| `--force` | Allow N == 1 (not recommended). N < 1 is always refused — keep=0 would delete the entire rollback cache. |
 
 Writes `/etc/systemd/system/paccache.service.d/archward.conf`
 (requires sudo), then runs `systemctl enable --now paccache.timer`.
-Exit 2 if N < 2 without `--force`, or if paccache.timer is not
+Exit 2 if N < 1 (always), if N < 2 without `--force`, or if paccache.timer is not
 available (non-systemd distros). Exit 1 if the write or systemctl
 command fails.
 

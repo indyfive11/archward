@@ -91,8 +91,8 @@ def test_single_kernel_fallback(monkeypatch) -> None:
     assert result.status is CheckStatus.PASS
 
 
-def test_no_candidates_warns(monkeypatch) -> None:
+def test_no_candidates_skips(monkeypatch) -> None:
     _patch(monkeypatch, running="7.0.9-arch1-1", packages=[])
     result = verify_phase._kernel_check()
-    assert result.status is CheckStatus.WARN
+    assert result.status is CheckStatus.SKIPPED
     assert "No linux*" in result.message

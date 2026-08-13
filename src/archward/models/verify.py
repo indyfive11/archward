@@ -10,6 +10,10 @@ class CheckStatus(StrEnum):
     PASS = "pass"
     WARN = "warn"
     FAIL = "fail"
+    # v0.5: a check that could not run (probe timeout, offline, disabled by
+    # config, nothing to assess). Counts in neither fail nor warn tallies.
+    # Previously encoded as PASS + "skipped" prose.
+    SKIPPED = "skipped"
 
 
 class VerifyCheck(BaseModel):

@@ -154,6 +154,16 @@ class RiskView(QWidget):
         )
         self._preview_banner.setVisible(True)
 
+    def set_check_error(self, error: str) -> None:
+        """checkupdates itself failed — say so instead of showing a bare
+        empty table (v0.5; the error used to be silently dropped)."""
+        self._preview_banner.setText(
+            f"WARNING: could not determine pending updates — {error}. "
+            "The list below may be empty because the check failed, not "
+            "because the system is up to date."
+        )
+        self._preview_banner.setVisible(True)
+
     def reset(self) -> None:
         self._tree.clear()
         self._counts.setText("")

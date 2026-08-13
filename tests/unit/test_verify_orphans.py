@@ -66,4 +66,4 @@ def test_orphan_check_pacman_not_found(monkeypatch) -> None:
 
     monkeypatch.setattr(subprocess, "run", boom)
     result = verify_phase._orphan_check()
-    assert result.status is CheckStatus.PASS
+    assert result.status is CheckStatus.SKIPPED

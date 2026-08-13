@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from archward.events import EventBus
+from archward.events import EventBus, HookResultsPayload, PhaseStatus
 from archward.models.config import HooksConfig
 from archward.models.hook import HookResult, HookStatus
 
@@ -122,8 +122,16 @@ class HookRunner:
             msg = f"hook FAILED, pipeline aborted ({warn_count} of {len(results)} failing)"
         log.info("[%s] %s", event_phase, msg)
         if self.bus is not None:
-            payload = {"hook_results": [r.model_dump(mode="json") for r in results]}
-            self.bus.emit_result(event_phase, msg, payload=payload)
+            if warn_count == 0:
+                status = PhaseStatus.PASS
+            elif proceed:
+                status = PhaseStatus.WARN
+            else:
+                status = PhaseStatus.FAIL
+            self.bus.emit_result(
+                event_phase, msg, status,
+                payload=HookResultsPayload(results=tuple(results)),
+            )
 
         return HookRunOutcome(proceed=proceed, results=results)
 

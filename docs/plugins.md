@@ -45,7 +45,7 @@ also lands in `~/.local/state/archward/logs/archward.log`.
 For a real, installable, fully-tested plugin see
 **[`examples/archward-verify-zerotier/`](examples/archward-verify-zerotier/)**.
 It parses `zerotier-cli info -j` and `zerotier-cli listnetworks -j` and
-emits one PASS/WARN/FAIL VerifyCheck row per joined network — exactly
+emits one PASS/WARN/FAIL (or SKIPPED, since v0.5) VerifyCheck row per joined network — exactly
 the kind of structured-output check that's awkward in shell. It also
 demonstrates the cross-cutting concerns every plugin should handle:
 
@@ -91,7 +91,7 @@ zfs = "archward_verify_zfs:check_zfs_pools"
 
 ```python
 import subprocess
-from archward.models.verify import CheckStatus, VerifyCheck
+from archward.plugin_api import CheckStatus, VerifyCheck
 
 
 def check_zfs_pools(cfg, snapshot):
@@ -158,6 +158,14 @@ contract. The internal layout of `ConfigModel` and `Snapshot` may
 evolve, but additive changes that respect prior fields will stay
 backward-compatible. Pin your plugin's `archward>=` lower bound to the
 minimum version whose model fields you depend on.
+
+Since v0.5, import plugin-facing symbols from the frozen facade
+**`archward.plugin_api`** (`VerifyCheck`, `CheckStatus`, `ConfigModel`,
+`Snapshot`, `PLUGIN_BUCKET`, `PLUGIN_ENTRY_POINT_GROUP`, `API_VERSION`).
+These re-export the same objects archward uses internally and only
+change compatibly within an `API_VERSION`. The older internal import
+paths (`archward.models.verify` etc.) keep working but are deprecated
+for plugin use.
 
 A future archward may add a second argument (e.g. a verify-context
 object). When it does, plugins will be encouraged to opt into the new

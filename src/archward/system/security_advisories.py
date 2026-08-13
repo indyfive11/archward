@@ -16,6 +16,8 @@ import shutil
 import time
 import urllib.error
 import urllib.request
+
+from archward.netutil import ADVISORIES_MAX_BYTES, bounded_read
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -143,7 +145,7 @@ def fetch_advisories(timeout: float = 10.0) -> list[Advisory]:
     log.debug("security_advisories: fetching %s", _ASA_URL)
     try:
         with urllib.request.urlopen(_ASA_URL, timeout=timeout) as resp:
-            raw = resp.read()
+            raw = bounded_read(resp, ADVISORIES_MAX_BYTES)
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         log.info("security_advisories: fetch skipped (%s)", exc)
         return []

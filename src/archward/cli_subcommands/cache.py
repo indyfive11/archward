@@ -77,6 +77,17 @@ def cmd_gaps(args, config_path: Path | None) -> int:
 def cmd_set_keep(args, config_path: Path | None) -> int:
     n = args.n
 
+    if n < 1:
+        # Hard floor (v0.5) — no --force bypass. paccache -rk0 (or a negative
+        # written into PACCACHE_ARGS) deletes the ENTIRE rollback cache,
+        # contradicting the rollback substrate archward exists to protect.
+        print(
+            f"Refusing keep={n}: keep must be at least 1 (0 would delete the "
+            "entire rollback cache).",
+            file=sys.stderr,
+        )
+        return 2
+
     if n < 2 and not args.force:
         print(
             f"Refusing keep={n}: fewer than 2 versions leaves no rollback candidate.",

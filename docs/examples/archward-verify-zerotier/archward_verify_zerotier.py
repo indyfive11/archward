@@ -27,7 +27,7 @@ import logging
 import shutil
 import subprocess
 
-from archward.models.verify import CheckStatus, VerifyCheck
+from archward.plugin_api import CheckStatus, VerifyCheck
 
 log = logging.getLogger(__name__)
 

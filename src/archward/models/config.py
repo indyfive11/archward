@@ -43,7 +43,10 @@ class RiskConfig(BaseModel):
     high: tuple[str, ...]
     medium_patterns: tuple[str, ...]
     kernel_patterns: tuple[str, ...]
-    kernel_pattern_exclude: tuple[str, ...] = ()
+    # v0.5: default aligned with defaults.py (they diverged — model said (),
+    # so a user [risk] section omitting this key silently lost the exclusion
+    # and linux-firmware/-docs were treated as kernels).
+    kernel_pattern_exclude: tuple[str, ...] = ("linux-firmware*", "linux-docs*")
 
 
 class ServicesConfig(BaseModel):
@@ -141,14 +144,18 @@ class ConfigModel(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     schema_version: int = 1
+    # Sections whose sub-models carry required fields stay required here —
+    # defaults.py supplies them (paths are dynamic; risk lists / pacnew rules
+    # are curated data). Everything else defaults at the model (v0.5
+    # single-sourcing; the duplicated literals in defaults.py are gone).
     general: GeneralConfig
-    gates: GatesConfig
     risk: RiskConfig
-    services: ServicesConfig
     pacnew: PacnewConfig
-    aur: AurConfig
-    pacman: PacmanConfig
-    verify: VerifyConfig
-    privilege: PrivilegeConfig
+    gates: GatesConfig = GatesConfig()
+    services: ServicesConfig = ServicesConfig()
+    aur: AurConfig = AurConfig()
+    pacman: PacmanConfig = PacmanConfig()
+    verify: VerifyConfig = VerifyConfig()
+    privilege: PrivilegeConfig = PrivilegeConfig()
     hooks: HooksConfig = HooksConfig()
     cache: CacheConfig = CacheConfig()

@@ -29,15 +29,11 @@ class Notification:
     urgency: str  # "low" | "normal" | "critical"
 
 
-# RESULT tag → (urgency, title prefix, success-state flag for body framing).
+# RESULT tag → (urgency, title), from the single TAG_META source (v0.5).
+from archward.pipeline.report import TAG_META
+
 _RESULT_NOTIFY: dict[str, tuple[str, str]] = {
-    "RESULT:SUCCESS": ("low", "Update complete"),
-    "RESULT:NEEDS_REVIEW": ("low", "Review needed"),
-    "RESULT:REBOOT_NEEDED": ("normal", "Reboot required"),
-    "RESULT:PACNEW_MERGE_NEEDED": ("normal", "Pacnew merge pending"),
-    "RESULT:ABORTED": ("normal", "Update aborted"),
-    "RESULT:VERIFY_FAILED": ("critical", "Verify failed"),
-    "RESULT:UPDATE_FAILED": ("critical", "Update failed"),
+    tag: (m.urgency, m.title) for tag, m in TAG_META.items()
 }
 
 

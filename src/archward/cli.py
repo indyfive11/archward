@@ -313,7 +313,11 @@ def _attach_cache_parser(subparsers) -> None:
 
     sk = sub.add_parser("set-keep", help="Set retention policy (keep N versions). Requires sudo.")
     sk.add_argument("n", type=int, metavar="N", help="Versions to keep per package (minimum 2).")
-    sk.add_argument("--force", action="store_true", help="Allow N < 2 (not recommended).")
+    sk.add_argument(
+        "--force", action="store_true",
+        help="Allow N == 1 (not recommended). N < 1 is always refused — "
+        "keep=0 would delete the entire rollback cache.",
+    )
 
     sub.add_parser("clean", help="Run paccache now with a pre-clean rollback-coverage summary.")
 
@@ -526,7 +530,12 @@ def _detect_command(yes: bool, config_path) -> int:
         accept_services=accept_services,
         accept_service_removals=accept_service_removals,
     )
-    path = write_config(new_cfg, config_path)
+    from archward.config.loader import ConfigReadOnlyError
+    try:
+        path = write_config(new_cfg, config_path)
+    except ConfigReadOnlyError as e:
+        print(f"archward: {e}", file=sys.stderr)
+        return 2
     print(f"wrote {path}")
     return 0
 
@@ -543,6 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.write_config:
         import shutil
         from archward.config.defaults import default_config
+        from archward.config.loader import ConfigReadOnlyError
 
         cfg = default_config()
         target = config_path or default_config_path()
@@ -550,7 +560,11 @@ def main(argv: list[str] | None = None) -> int:
             backup = target.with_suffix(".toml.bak")
             shutil.copy2(target, backup)
             print(f"backed up existing config to {backup}")
-        path = write_config(cfg, config_path)
+        try:
+            path = write_config(cfg, config_path)
+        except ConfigReadOnlyError as e:
+            print(f"archward: {e}", file=sys.stderr)
+            return 2
         print(f"wrote defaults to {path}")
         return 0
 

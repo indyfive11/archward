@@ -86,7 +86,17 @@ def try_acquire_lock() -> Iterator[bool]:
     import fcntl
     import os
 
-    paths.state_dir().mkdir(parents=True, exist_ok=True)
+    state_root = paths.state_dir()
+    state_root.mkdir(parents=True, exist_ok=True)
+    # v0.5 hardening: the state root holds snapshots of /etc content and
+    # cached feeds — keep it private. One-time chmod so existing installs
+    # converge too; ONLY the state root, never the user-configurable
+    # snapshot/log dirs (which may deliberately live elsewhere).
+    try:
+        if (state_root.stat().st_mode & 0o777) != 0o700:
+            state_root.chmod(0o700)
+    except OSError:
+        pass
     lock_path = paths.lock_file()
     fd = open(lock_path, "w", encoding="utf-8")
     acquired = False
@@ -135,19 +145,23 @@ def acquire_lock() -> Iterator[None]:
 def setup_app(
     *,
     warmup_sudo: bool = True,
+    console: bool = True,
     config_path: Path | None = None,
 ) -> tuple[ConfigModel, SudoStrategy, EventBus]:
     """Build the standard three-piece app context: config, sudo strategy, event bus.
 
     If `warmup_sudo` is True, calls strategy.warmup() so the sudo timestamp is hot
     before any phase tries to use it — this consolidates the askpass prompt into a
-    single early dialog instead of one per privileged command.
+    single early dialog instead of one per privileged command. `console=False`
+    (v0.5) skips the stdout event subscriber for front-ends with their own sink
+    (a GUI attaches a Qt bridge; sudo warmup stays the caller's business there —
+    pass warmup_sudo=False and keep the async worker).
 
     `config_path` overrides the default config location (used by `--profile`).
     """
     cfg = build_config(config_path)
     setup_logging(cfg.general.log_dir, keep_logs=cfg.general.keep_logs)
-    bus = build_event_bus()
+    bus = build_event_bus(console=console)
     strategy = build_sudo_strategy(cfg)
     if warmup_sudo:
         ok = strategy.warmup()

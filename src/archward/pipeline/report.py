@@ -30,6 +30,34 @@ class ReportSummary:
     reboot_needed: bool
 
 
+@dataclass(frozen=True)
+class TagMeta:
+    """Presentation metadata for a RESULT tag — the single source consumed
+    by the GUI rail, the result banner, and desktop notifications (v0.5;
+    previously three hand-maintained maps that could drift)."""
+
+    rail_status: str   # phase-rail status: pass | warn | fail | skipped
+    severity: str      # banner severity key: success | info | neutral | danger
+    human: str         # banner label
+    urgency: str       # notification urgency: low | normal | critical
+    title: str         # notification title
+
+
+# The RESULT tag *strings* are a public contract ($ARCHWARD_RESULT in hooks,
+# CLI output) and stay stable; only this presentation table may evolve.
+TAG_META: dict[str, TagMeta] = {
+    "RESULT:SUCCESS": TagMeta("pass", "success", "Success", "low", "Update complete"),
+    "RESULT:NEEDS_REVIEW": TagMeta("warn", "info", "Needs Review", "low", "Review needed"),
+    "RESULT:REBOOT_NEEDED": TagMeta("warn", "info", "Reboot Needed", "normal", "Reboot required"),
+    "RESULT:PACNEW_MERGE_NEEDED": TagMeta(
+        "warn", "info", "Pacnew Merge Needed", "normal", "Pacnew merge pending"
+    ),
+    "RESULT:ABORTED": TagMeta("warn", "neutral", "Aborted", "normal", "Update aborted"),
+    "RESULT:VERIFY_FAILED": TagMeta("fail", "danger", "Verify Failed", "critical", "Verify failed"),
+    "RESULT:UPDATE_FAILED": TagMeta("fail", "danger", "Update Failed", "critical", "Update failed"),
+}
+
+
 def derive_result(
     *,
     preflight_failed: bool,

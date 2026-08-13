@@ -63,7 +63,7 @@ def test_pty_path_answers_yes_no_prompt() -> None:
         argv,
         strategy=_NoopSudoStrategy(),
         bus=bus,
-        phase="test",
+        phase="pipeline",
         use_sudo=False,
         prompt_provider=provider,
     )
@@ -90,7 +90,7 @@ def test_pty_path_no_prompt_completes_cleanly() -> None:
         argv,
         strategy=_NoopSudoStrategy(),
         bus=bus,
-        phase="test",
+        phase="pipeline",
         use_sudo=False,
         prompt_provider=provider,
     )
@@ -122,7 +122,7 @@ def test_pty_path_cancel_via_empty_response_sigints_subprocess() -> None:
         argv,
         strategy=_NoopSudoStrategy(),
         bus=bus,
-        phase="test",
+        phase="pipeline",
         use_sudo=False,
         prompt_provider=cancel_provider,
     )
@@ -154,7 +154,7 @@ def test_pty_cancel_event_interrupts_via_tty() -> None:
         argv,
         strategy=_NoopSudoStrategy(),
         bus=bus,
-        phase="test",
+        phase="pipeline",
         use_sudo=False,
         cancel_event=cancel,
         prompt_provider=provider,
@@ -185,7 +185,7 @@ def test_pty_cancel_escalates_to_sigterm_when_sigint_ignored(monkeypatch) -> Non
         argv,
         strategy=_NoopSudoStrategy(),
         bus=bus,
-        phase="test",
+        phase="pipeline",
         use_sudo=False,
         cancel_event=cancel,
         prompt_provider=provider,
@@ -212,7 +212,7 @@ def test_pty_prompt_cancel_keeps_prompt_text_in_capture() -> None:
         argv,
         strategy=_NoopSudoStrategy(),
         bus=bus,
-        phase="test",
+        phase="pipeline",
         use_sudo=False,
         prompt_provider=cancel_provider,
     )
@@ -232,7 +232,7 @@ def test_pipe_path_backward_compatibility_no_prompt_provider() -> None:
         argv,
         strategy=_NoopSudoStrategy(),
         bus=bus,
-        phase="test",
+        phase="pipeline",
         use_sudo=False,
         prompt_provider=None,
     )
@@ -241,3 +241,82 @@ def test_pipe_path_backward_compatibility_no_prompt_provider() -> None:
     joined = "\n".join(captured)
     assert "line one" in joined
     assert "line two" in joined
+
+
+def test_pty_fake_prompt_mid_stream_held_not_pre_injected() -> None:
+    """Hold-and-settle (v0.5): prompt-shaped output followed by MORE output
+    must not have the answer written mid-stream (pre-injection class). The
+    held answer is delivered once the real prompt is pending / the stream
+    settles — the run completes, exactly one answer reaches the child."""
+    import time
+
+    bus, log = _bus_with_capture()
+    provider_calls: list[str] = []
+
+    def provider(line: str, kind: prompts.PromptKind) -> str:
+        provider_calls.append(line)
+        if len(provider_calls) == 1:
+            # Slow human on the FAKE prompt; the child prints more output in
+            # this window, which must force the answer to be held.
+            time.sleep(0.8)
+        return "Y"
+
+    argv = [
+        "bash", "-c",
+        # Fake prompt (never read), then more output, then the real prompt.
+        'printf "fake danger [Y/n] "; sleep 0.5; echo "more output"; '
+        'read -p "real prompt [Y/n] " ans; echo "got=$ans"',
+    ]
+
+    code, captured = run_streaming(
+        argv,
+        strategy=_NoopSudoStrategy(),
+        bus=bus,
+        phase="pipeline",
+        use_sudo=False,
+        prompt_provider=provider,
+    )
+
+    assert code == 0
+    joined = "\n".join(captured)
+    assert "got=Y" in joined
+    # The interleave was surfaced honestly and the answer was held, not
+    # written mid-stream.
+    assert any("holding the response" in line for line in log)
+
+
+def test_pty_real_prompt_with_interleaved_output_does_not_stall() -> None:
+    """Regression (v0.5 bug hunt): output arriving AFTER a real prompt while
+    the user is answering used to complete the prompt's line, empty the
+    buffer, and stall the runner forever with the answer discarded. The
+    held answer must be delivered after the stream settles."""
+    import time
+
+    bus, log = _bus_with_capture()
+    provider_calls: list[str] = []
+
+    def provider(line: str, kind: prompts.PromptKind) -> str:
+        provider_calls.append(line)
+        time.sleep(0.8)  # slow human; background noise lands in this window
+        return "Y"
+
+    argv = [
+        "bash", "-c",
+        '( sleep 0.4; echo "background noise" ) & '
+        'read -p "Proceed? [Y/n] " ans; echo "got=$ans"; wait',
+    ]
+
+    code, captured = run_streaming(
+        argv,
+        strategy=_NoopSudoStrategy(),
+        bus=bus,
+        phase="pipeline",
+        use_sudo=False,
+        prompt_provider=provider,
+    )
+
+    assert code == 0
+    joined = "\n".join(captured)
+    assert "got=Y" in joined
+    assert len(provider_calls) == 1  # answered once; never re-asked
+    assert any("answer sent after output interruption" in line for line in log)

@@ -59,9 +59,9 @@ _MAPS_MULTI_LIB = (
 
 # ── disabled ─────────────────────────────────────────────────────────────────
 
-def test_disabled_returns_pass() -> None:
+def test_disabled_returns_skipped() -> None:
     result = verify_phase._stale_libs_check(_cfg(stale_libs=False))
-    assert result.status is CheckStatus.PASS
+    assert result.status is CheckStatus.SKIPPED
     assert "disabled" in result.message
 
 

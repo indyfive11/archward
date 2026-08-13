@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from archward.events import EventBus
+from archward.events import EventBus, PacnewFilesPayload, PhaseStatus
 from archward.models.config import ConfigModel
 from archward.models.pacnew import PacnewFile
 from archward.pacman.pacnew import classify, find_pacnew_files
@@ -32,7 +32,7 @@ def scan_pacnew(cfg: ConfigModel, snapshot_path: Path, bus: EventBus) -> list[Pa
 
     paths = find_pacnew_files(since_epoch=since_epoch)
     if not paths:
-        bus.emit_result(PHASE, "No new .pacnew files")
+        bus.emit_result(PHASE, "No new .pacnew files", PhaseStatus.PASS)
         return []
 
     files = [classify(p, cfg.pacnew) for p in paths]
@@ -44,9 +44,12 @@ def scan_pacnew(cfg: ConfigModel, snapshot_path: Path, bus: EventBus) -> list[Pa
             + (f" — {f.note}" if f.note else "")
             + ")",
         )
+    # Status pinned PASS for parity with the pre-typed rail behavior —
+    # needing-attention is surfaced via the Pacnew view + RESULT tag.
     bus.emit_result(
         PHASE,
         f"{len(files)} pacnew file(s) need attention",
-        payload={"files": [f.model_dump(mode="json") for f in files]},
+        PhaseStatus.PASS,
+        payload=PacnewFilesPayload(files=tuple(files)),
     )
     return files

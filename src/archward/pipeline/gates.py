@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from archward.events import EventBus
+from archward.events import EventBus, GateResultsPayload, PhaseStatus
 from archward.models.config import ConfigModel
 from archward.models.gate import GateResult, GateStatus
 from archward.models.snapshot import Snapshot
@@ -217,7 +217,8 @@ def preflight_checks(cfg: ConfigModel, bus: EventBus) -> list[GateResult]:
     bus.emit_result(
         PHASE_PREFLIGHT,
         "pre-flight OK" if not locked else "pre-flight FAILED",
-        payload={"results": [r.model_dump(mode="json") for r in results]},
+        PhaseStatus.PASS if not locked else PhaseStatus.FAIL,
+        payload=GateResultsPayload(results=tuple(results)),
     )
     return results
 
@@ -278,7 +279,8 @@ def run_gates(cfg: ConfigModel, snapshot: Snapshot, bus: EventBus) -> list[GateR
     bus.emit_result(
         PHASE_GATES,
         "gates passed" if not any_fail(results) else "gates failed",
-        payload={"results": [r.model_dump(mode="json") for r in results]},
+        PhaseStatus.PASS if not any_fail(results) else PhaseStatus.FAIL,
+        payload=GateResultsPayload(results=tuple(results)),
     )
     return results
 

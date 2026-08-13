@@ -19,7 +19,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from archward.events import EventBus
+from archward.events import EventBus, PhaseStatus, SnapshotDonePayload, SnapshotProgressPayload
 from archward.models.config import ConfigModel
 from archward.models.snapshot import Snapshot, SnapshotMeta
 from archward.pacman import query as pq
@@ -335,23 +335,31 @@ def take_snapshot(
 
     bus.emit_log(PHASE, f"Snapshot directory: {snap_root}")
 
+    def _step(n: int, label: str) -> None:
+        # Human log line (CLI + log pane) AND a typed progress event (drives
+        # the SnapshotView checklist — replaces the old "[N/6]" text parsing).
+        bus.emit_log(PHASE, f"[{n}/6] {label}")
+        bus.emit_progress(
+            PHASE, SnapshotProgressPayload(step=n, total=6, label=label)
+        )
+
     try:
-        bus.emit_log(PHASE, "[1/6] Packages")
+        _step(1, "Packages")
         package_files = _gather_packages(snap_root, cfg)
 
-        bus.emit_log(PHASE, "[2/6] Configs")
+        _step(2, "Configs")
         config_files = _gather_configs(snap_root, strategy)
 
-        bus.emit_log(PHASE, "[3/6] Network")
+        _step(3, "Network")
         _gather_network(snap_root)
 
-        bus.emit_log(PHASE, "[4/6] Services")
+        _step(4, "Services")
         service_files = _gather_services(snap_root, cfg)
 
-        bus.emit_log(PHASE, "[5/6] System")
+        _step(5, "System")
         _gather_system(snap_root)
 
-        bus.emit_log(PHASE, "[6/6] Pacnew baseline")
+        _step(6, "Pacnew baseline")
         _capture_pacnew_baseline(snap_root)
 
         # Content validation BEFORE the .timestamp marker: a snapshot that
@@ -388,7 +396,12 @@ def take_snapshot(
         helper_detected=None,
     )
 
-    bus.emit_result(PHASE, f"Snapshot complete: {snapshot_id}")
+    bus.emit_result(
+        PHASE,
+        f"Snapshot complete: {snapshot_id}",
+        PhaseStatus.PASS,
+        payload=SnapshotDonePayload(snapshot_id=snapshot_id),
+    )
     return Snapshot(
         meta=meta,
         package_files=package_files,

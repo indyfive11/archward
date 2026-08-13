@@ -55,10 +55,7 @@ _KERNEL_PATTERNS = (
     "linux-api-headers",
 )
 
-_KERNEL_PATTERN_EXCLUDE = (
-    "linux-firmware*",
-    "linux-docs*",
-)
+# kernel_pattern_exclude lives on the RiskConfig model default (v0.5).
 
 _MEDIUM_PATTERNS = (
     "*-server",
@@ -123,54 +120,22 @@ _PACNEW_RULES = (
 
 
 def default_config() -> ConfigModel:
-    """Return a Phase 1 ConfigModel populated entirely from hard-coded defaults."""
+    """Return the default ConfigModel.
+
+    v0.5 single-sourcing: every simple default lives on the model fields
+    (models/config.py) — this function supplies only what the model can't
+    default itself: the dynamic XDG paths and the curated risk/pacnew data.
+    A drift-guard test asserts nothing here shadows a model default.
+    """
     return ConfigModel(
         general=GeneralConfig(
             snapshot_dir=paths.snapshots_dir(),
-            # Must match the GeneralConfig model default (raised 10 -> 40 in
-            # v0.4.7 with date-based retention; this literal was missed).
-            keep_snapshots=40,
             log_dir=paths.logs_dir(),
-            keep_logs=20,
-            notify_on_completion=True,
-        ),
-        gates=GatesConfig(
-            snapshot_max_age_minutes=60,
-            min_disk_gb=5,
-            allow_override=True,
         ),
         risk=RiskConfig(
             high=_HIGH_RISK,
             medium_patterns=_MEDIUM_PATTERNS,
             kernel_patterns=_KERNEL_PATTERNS,
-            kernel_pattern_exclude=_KERNEL_PATTERN_EXCLUDE,
         ),
-        services=ServicesConfig(to_verify=()),
-        pacnew=PacnewConfig(
-            default_strategy=PacnewRecommendation.REVIEW_NEEDED,
-            rules=_PACNEW_RULES,
-        ),
-        aur=AurConfig(
-            enabled=True,  # Phase 3 — AUR enabled by default
-            helper_preference=("yay", "paru", "aurutils"),
-            skip=False,
-            quarantine_enabled=True,
-            quarantine_min_failures=3,
-            quarantine_initial_days=7,
-            quarantine_max_days=28,
-        ),
-        pacman=PacmanConfig(noconfirm=True, extra_args=()),
-        verify=VerifyConfig(
-            enabled=True,
-            reboot_log="/var/log/reboot-recommendation-trigger.log",
-            stale_libs=False,
-        ),
-        privilege=PrivilegeConfig(mode="auto", askpass=""),
-        hooks=HooksConfig(
-            pre_update=(),
-            post_verify=(),
-            timeout_seconds=60,
-            fail_pipeline_on_error=False,
-        ),
-        cache=CacheConfig(managed=False, keep_versions=3, warn_if_unmanaged=True),
+        pacnew=PacnewConfig(rules=_PACNEW_RULES),
     )

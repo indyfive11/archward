@@ -218,7 +218,7 @@ def test_advisory_check_disabled(monkeypatch, tmp_path) -> None:
     )
     cfg = cfg.model_copy(update={"verify": new_verify})
     result = verify_phase._security_advisory_check(cfg)
-    assert result.status is CheckStatus.PASS
+    assert result.status is CheckStatus.SKIPPED
     assert "disabled" in result.message
 
 
@@ -226,7 +226,7 @@ def test_advisory_check_arch_audit_present(monkeypatch) -> None:
     """arch-audit installed → PASS (defer to it)."""
     monkeypatch.setattr(verify_phase.sa, "arch_audit_present", lambda: True)
     result = verify_phase._security_advisory_check(default_config())
-    assert result.status is CheckStatus.PASS
+    assert result.status is CheckStatus.SKIPPED
     assert "arch-audit" in result.message
 
 
@@ -235,7 +235,7 @@ def test_advisory_check_network_failure_skip(monkeypatch) -> None:
     monkeypatch.setattr(verify_phase.sa, "arch_audit_present", lambda: False)
     monkeypatch.setattr(verify_phase.sa, "fetch_advisories", lambda: [])
     result = verify_phase._security_advisory_check(default_config())
-    assert result.status is CheckStatus.PASS
+    assert result.status is CheckStatus.SKIPPED
     assert "skipped" in result.message
 
 

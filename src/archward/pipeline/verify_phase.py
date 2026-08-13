@@ -26,7 +26,7 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Callable
 
-from archward.events import EventBus
+from archward.events import EventBus, PhaseStatus, VerifyResultPayload
 from archward.models.config import ConfigModel
 from archward.models.snapshot import Snapshot
 from archward.models.verify import CheckStatus, VerifyCheck, VerifyResult
@@ -35,7 +35,8 @@ from archward.pacman.pacnew import find_pacnew_files
 from archward.system import disk, kernel, services
 from archward.system import security_advisories as sa
 
-PLUGIN_ENTRY_POINT_GROUP = "archward.verify_checks"
+# Canonical definitions live in the frozen plugin facade (v0.5).
+from archward.plugin_api import PLUGIN_BUCKET, PLUGIN_ENTRY_POINT_GROUP  # noqa: E402
 
 # Per-plugin timeout — see run_verify's plugin loop (v0.4.1 F4).
 PLUGIN_TIMEOUT_S = 30
@@ -116,7 +117,7 @@ def _kernel_check() -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name="kernel",
-            status=CheckStatus.WARN,
+            status=CheckStatus.SKIPPED,
             message="No linux* package detected — kernel match skipped",
         )
 
@@ -214,7 +215,7 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name="rollback-cache",
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message="no snapshot package list to compare (skipped)",
         )
 
@@ -274,7 +275,7 @@ def _cache_safety_check(snapshot_path: Path) -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name="rollback-cache",
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message=(
                 "cache scan failed/timed out — rollback-cache skipped "
                 f"(checked: {', '.join(str(d) for d in all_scanned)})"
@@ -362,7 +363,7 @@ def _boot_integrity_check(boot_dir: Path = _BOOT_DIR) -> VerifyCheck:
 
     def _probe() -> tuple[str, str, str | None]:
         if not boot_dir.is_dir():
-            return ("pass", f"{boot_dir} not present — boot-integrity skipped", None)
+            return ("skip", f"{boot_dir} not present — boot-integrity skipped", None)
 
         # Unified Kernel Image setups bundle the initramfs inside the
         # .efi. A standalone initramfs-<flavour>.img may still be lying
@@ -378,7 +379,7 @@ def _boot_integrity_check(boot_dir: Path = _BOOT_DIR) -> VerifyCheck:
             try:
                 if ud.is_dir() and any(ud.glob("*.efi")):
                     return (
-                        "pass",
+                        "skip",
                         "Unified Kernel Image present — boot-integrity "
                         "skipped (standalone initramfs not authoritative)",
                         None,
@@ -388,7 +389,7 @@ def _boot_integrity_check(boot_dir: Path = _BOOT_DIR) -> VerifyCheck:
 
         kernels = sorted(boot_dir.glob("vmlinuz-*"))
         if not kernels:
-            return ("pass", "no vmlinuz-* kernel image — boot-integrity skipped", None)
+            return ("skip", "no vmlinuz-* kernel image — boot-integrity skipped", None)
 
         problems: list[str] = []
         assessed = 0
@@ -422,7 +423,7 @@ def _boot_integrity_check(boot_dir: Path = _BOOT_DIR) -> VerifyCheck:
             return ("fail", f"boot may be broken — {head}{extra}", "\n".join(problems))
         if assessed == 0:
             return (
-                "pass",
+                "skip",
                 "no flavour-named initramfs to assess (dracut/UKI?) — skipped",
                 None,
             )
@@ -439,7 +440,7 @@ def _boot_integrity_check(boot_dir: Path = _BOOT_DIR) -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name=name,
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message=f"{boot_dir} fs probe timed out — boot-integrity skipped",
             detail="Check /boot is on a responsive filesystem.",
         )
@@ -448,11 +449,14 @@ def _boot_integrity_check(boot_dir: Path = _BOOT_DIR) -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name=name,
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message="boot-integrity skipped (probe error)",
         )
 
-    status = CheckStatus.FAIL if verdict == "fail" else CheckStatus.PASS
+    status = {
+        "fail": CheckStatus.FAIL,
+        "skip": CheckStatus.SKIPPED,
+    }.get(verdict, CheckStatus.PASS)
     return VerifyCheck(
         bucket="universal", name=name, status=status, message=message, detail=detail
     )
@@ -596,7 +600,7 @@ def _orphan_check() -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name="orphans",
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message="pacman not found — orphan check skipped",
         )
 
@@ -721,7 +725,7 @@ def _stale_libs_check(cfg: ConfigModel) -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name="stale-libs",
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message="stale library check disabled",
         )
 
@@ -785,7 +789,7 @@ def _security_advisory_check(cfg: ConfigModel) -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name="security-advisories",
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message="security advisory check disabled",
         )
 
@@ -793,7 +797,7 @@ def _security_advisory_check(cfg: ConfigModel) -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name="security-advisories",
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message="arch-audit present — ASA check deferred to arch-audit",
         )
 
@@ -803,7 +807,7 @@ def _security_advisory_check(cfg: ConfigModel) -> VerifyCheck:
         return VerifyCheck(
             bucket="universal",
             name="security-advisories",
-            status=CheckStatus.PASS,
+            status=CheckStatus.SKIPPED,
             message="ASA check skipped (network unavailable or feed empty)",
         )
 
@@ -915,7 +919,7 @@ def _auto_prune_stale(
     was removed so the user has audit-trail visibility.
     """
     from archward.config.detect import detect_stale_services
-    from archward.config.loader import merge_partial, write_config
+    from archward.config.loader import merge_partial, update_config_sections
     from archward.models.config import ServicesConfig
 
     if not cfg.services.auto_prune or config_path is None:
@@ -923,23 +927,22 @@ def _auto_prune_stale(
     stale = detect_stale_services(cfg)
     if not stale:
         return cfg, None
-    pruned = merge_partial(
-        cfg,
-        services=ServicesConfig(
-            to_verify=tuple(u for u in cfg.services.to_verify if u not in set(stale)),
-            severity=dict(cfg.services.severity),
-            auto_prune=cfg.services.auto_prune,
-        ),
+    new_services = ServicesConfig(
+        to_verify=tuple(u for u in cfg.services.to_verify if u not in set(stale)),
+        severity=dict(cfg.services.severity),
+        auto_prune=cfg.services.auto_prune,
     )
-    try:
-        write_config(pruned, config_path)
-    except OSError as e:
-        bus.emit_log(PHASE, f"auto-prune: could not write {config_path}: {e}")
+    pruned = merge_partial(cfg, services=new_services)
+    # Surgical write (v0.5): an unattended writer must touch ONLY [services]
+    # — never rewrite the whole file (which laundered substituted defaults
+    # over broken sections and deleted plugin-owned sections).
+    if not update_config_sections(config_path, services=new_services):
+        bus.emit_log(PHASE, f"auto-prune: could not update {config_path} — see log")
         return cfg, VerifyCheck(
             bucket="universal",
             name="auto-prune",
             status=CheckStatus.WARN,
-            message=f"failed to persist auto-prune to {config_path}: {e}",
+            message=f"failed to persist auto-prune to {config_path}",
             detail=", ".join(stale),
         )
     return pruned, VerifyCheck(
@@ -1023,7 +1026,7 @@ def run_verify(
                 name, PLUGIN_TIMEOUT_S,
             )
             checks.append(VerifyCheck(
-                bucket="plugin",
+                bucket=PLUGIN_BUCKET,
                 name=f"plugin:{name}",
                 status=CheckStatus.FAIL,
                 message=f"plugin timed out after {PLUGIN_TIMEOUT_S}s",
@@ -1033,7 +1036,7 @@ def run_verify(
             e = exc_box[0]
             log.exception("verify-check plugin %s raised", name, exc_info=e)
             checks.append(VerifyCheck(
-                bucket="plugin",
+                bucket=PLUGIN_BUCKET,
                 name=f"plugin:{name}",
                 status=CheckStatus.FAIL,
                 message=f"plugin raised {type(e).__name__}: {e}",
@@ -1043,7 +1046,7 @@ def run_verify(
         for c in produced or []:
             if not isinstance(c, VerifyCheck):
                 checks.append(VerifyCheck(
-                    bucket="plugin",
+                    bucket=PLUGIN_BUCKET,
                     name=f"plugin:{name}",
                     status=CheckStatus.FAIL,
                     message=f"plugin yielded non-VerifyCheck: {type(c).__name__}",
@@ -1067,9 +1070,18 @@ def run_verify(
         warn_count=warn_count,
         reboot_needed=reboot_needed,
     )
+    if fail_count:
+        status = PhaseStatus.FAIL
+    elif warn_count:
+        status = PhaseStatus.WARN
+    else:
+        status = PhaseStatus.PASS
+    skip_count = sum(1 for c in result.checks if c.status is CheckStatus.SKIPPED)
+    skip_suffix = f", {skip_count} skipped" if skip_count else ""
     bus.emit_result(
         PHASE,
-        f"verify: {fail_count} FAIL, {warn_count} WARN",
-        payload={"result": result.model_dump(mode="json")},
+        f"verify: {fail_count} FAIL, {warn_count} WARN{skip_suffix}",
+        status,
+        payload=VerifyResultPayload(result=result),
     )
     return result

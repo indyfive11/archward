@@ -54,6 +54,8 @@ def _status_colors():
         CheckStatus.PASS: p.pass_fg,
         CheckStatus.WARN: p.warn_fg,
         CheckStatus.FAIL: p.fail_fg,
+        # Skipped ≠ failed and ≠ passed — render in the muted keep-ours tone.
+        CheckStatus.SKIPPED: p.keep_ours_fg,
     }
 
 
@@ -201,8 +203,9 @@ class VerifyView(QWidget):
 
     def _maybe_attach_hint_button(self, item: QTreeWidgetItem, check) -> None:
         """Place a 'What to do?' button in column 3 for FAIL or WARN rows that
-        have a registered hint. PASS rows never get guidance."""
-        if check.status is CheckStatus.PASS:
+        have a registered hint. PASS and SKIPPED rows never get guidance —
+        a skipped check didn't fail, so remediation would mislead."""
+        if check.status in (CheckStatus.PASS, CheckStatus.SKIPPED):
             return
         hint_key = _hint_key_for(check.bucket, check.name)
         hint = help_text.get("verify_hint", hint_key)

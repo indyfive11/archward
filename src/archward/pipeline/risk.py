@@ -14,7 +14,12 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from archward.events import EventBus
+from archward.events import (
+    EventBus,
+    PhaseStatus,
+    RiskPendingPayload,
+    TransactionPreviewPayload,
+)
 from archward.models.config import ConfigModel
 from archward.models.update import PendingUpdate, RiskLevel
 from archward.pacman import query as pq
@@ -113,7 +118,8 @@ def classify_pending(cfg: ConfigModel, bus: EventBus) -> ClassifiedPending:
         bus.emit_result(
             PHASE,
             f"WARN: pending-update check unavailable ({cu.error})",
-            payload={"pending": [], "check_error": cu.error},
+            PhaseStatus.WARN,
+            payload=RiskPendingPayload(pending=(), check_error=cu.error),
         )
         return ClassifiedPending(check_ok=False, check_error=cu.error)
     pending = cu.pending
@@ -129,7 +135,8 @@ def classify_pending(cfg: ConfigModel, bus: EventBus) -> ClassifiedPending:
     bus.emit_result(
         PHASE,
         f"{len(classified)} pending: {high} HIGH, {medium} MEDIUM, {low} LOW",
-        payload={"pending": [u.model_dump(mode="json") for u in classified]},
+        PhaseStatus.PASS,
+        payload=RiskPendingPayload(pending=tuple(classified)),
     )
     return ClassifiedPending(updates=classified)
 
@@ -145,14 +152,17 @@ def preview_transaction(bus: EventBus) -> pq.TransactionPreview:
         for c in preview.conflicts:
             bus.emit_log(PHASE, f"  ALERT: {c}")
 
+    # Status pinned PASS even with replacements/conflicts present — the
+    # preview is informational; the WARN surface is the risk log lines.
     bus.emit_result(
         PHASE,
         f"preview: {preview.package_count} packages, "
         f"{len(preview.replacements)} replacements, {len(preview.conflicts)} alerts",
-        payload={
-            "package_count": preview.package_count,
-            "replacement_count": len(preview.replacements),
-            "conflict_count": len(preview.conflicts),
-        },
+        PhaseStatus.PASS,
+        payload=TransactionPreviewPayload(
+            package_count=preview.package_count,
+            replacement_count=len(preview.replacements),
+            conflict_count=len(preview.conflicts),
+        ),
     )
     return preview

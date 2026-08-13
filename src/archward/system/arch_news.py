@@ -14,6 +14,8 @@ import logging
 import time
 import urllib.error
 import urllib.request
+
+from archward.netutil import NEWS_MAX_BYTES, bounded_read
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -129,7 +131,7 @@ def fetch_news(timeout: float = 8.0) -> list[NewsItem]:
     log.debug("arch_news: fetching %s", _FEED_URL)
     try:
         with urllib.request.urlopen(_FEED_URL, timeout=timeout) as resp:
-            xml_bytes = resp.read()
+            xml_bytes = bounded_read(resp, NEWS_MAX_BYTES)
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         log.info("arch_news: fetch skipped (%s)", exc)
         return []

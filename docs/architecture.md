@@ -51,16 +51,19 @@ Mapping for collection fields so they're effectively immutable — see
 
 ```python
 class PhaseEvent(BaseModel):
-    kind: PhaseEventKind  # PHASE_START / PHASE_LOG / PHASE_RESULT / PIPELINE_DONE
-    phase: str
+    kind: PhaseEventKind        # PHASE_START / PHASE_PROGRESS / PHASE_LOG / PHASE_RESULT
+    phase: Phase                # closed StrEnum of phase names
     message: str | None
-    payload: dict | None  # rich data — Pydantic model dumps for views to absorb
+    status: PhaseStatus | None  # emitter-declared pass/warn/fail/skipped (on PHASE_RESULT)
+    payload: EventPayload | None  # frozen typed payload models, carried by reference
     timestamp: datetime
 ```
 
-`PHASE_RESULT` events carry a `payload` so views can render typed data
-(GateResult, PendingUpdate, VerifyResult, PacnewFile) without parsing log
-strings.
+Since v0.5 the protocol is fully typed: every `PHASE_RESULT` declares its
+`status` explicitly (the GUI rail consumes the enum — no message-prose
+classification), and payloads are frozen `EventPayload` subclasses
+(`GateResultsPayload`, `RiskPendingPayload`, `VerifyResultPayload`, …)
+routed by isinstance dispatch instead of stringly-keyed dicts.
 
 ## Sudo strategy
 

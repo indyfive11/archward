@@ -28,14 +28,14 @@ def _touch(p: Path, mtime: float) -> None:
 
 def test_no_boot_dir_skips(tmp_path) -> None:
     chk = verify_phase._boot_integrity_check(tmp_path / "nope")
-    assert chk.status is CheckStatus.PASS
+    assert chk.status is CheckStatus.SKIPPED
     assert "skipped" in chk.message
 
 
 def test_no_kernel_image_skips(tmp_path) -> None:
     (tmp_path).mkdir(exist_ok=True)
     chk = verify_phase._boot_integrity_check(tmp_path)
-    assert chk.status is CheckStatus.PASS
+    assert chk.status is CheckStatus.SKIPPED
     assert "skipped" in chk.message
 
 
@@ -65,7 +65,7 @@ def test_uki_present_skips(tmp_path) -> None:
     uki.mkdir(parents=True)
     (uki / "arch-linux.efi").write_bytes(b"UKI")
     chk = verify_phase._boot_integrity_check(tmp_path)
-    assert chk.status is CheckStatus.PASS
+    assert chk.status is CheckStatus.SKIPPED
     assert "Unified Kernel Image" in chk.message
 
 
@@ -73,7 +73,7 @@ def test_no_matching_initramfs_skips(tmp_path) -> None:
     # vmlinuz present but no initramfs-linux.img → dracut/UKI/exotic.
     _touch(tmp_path / "vmlinuz-linux", 1000)
     chk = verify_phase._boot_integrity_check(tmp_path)
-    assert chk.status is CheckStatus.PASS
+    assert chk.status is CheckStatus.SKIPPED
     assert "skipped" in chk.message
 
 
