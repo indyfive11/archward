@@ -212,6 +212,14 @@ archward history [list|show <id|latest>] [--json]
 archward aur quarantine list
 archward aur quarantine clear [PKG] [--yes]
     Inspect or clear the AUR build quarantine list.
+
+archward doctor [--json]
+    One-shot read-only self-diagnostic: identity, distro, config
+    validity, sudo/askpass, pacman tooling + DB lock, disk, cache
+    rollback safety, state dirs, AUR helper, stale service entries,
+    GUI stack (import AND Qt platform init), last recorded run.
+    Changes nothing; attach the output (or --json) to bug reports.
+    Exits 0 all-pass / 1 any-fail / 2 warnings-only.
 ```
 
 ### Exit codes

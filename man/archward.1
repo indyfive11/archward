@@ -333,6 +333,19 @@ for the newest run.
 .B \-\-json
 dumps the raw run document \(em the stable scripting surface; see
 docs/cli.md for the schema and its stability contract.
+.SS archward doctor [\-\-json]
+One-shot read-only self-diagnostic \(em the first command to run (and
+the output to attach to a bug report) when archward misbehaves. Checks
+archward identity, distro, config validity, sudo/askpass availability,
+pacman tooling and DB lock, disk space, cache rollback safety, state
+directories, AUR helper, stale service entries, the GUI stack (PySide6
+import and Qt platform-plugin initialization), and the last recorded
+run. Changes nothing: no config writes, no directory creation, no
+password prompts. Where a problem has a known fix, the check names the
+exact command.
+.B \-\-json
+emits a stable JSON document (schema_version 1; see docs/cli.md).
+Exit 0 if all pass; exit 1 if any FAIL; exit 2 for warnings only.
 .SH EXIT STATUS
 .SS Flag form
 .TP
@@ -363,7 +376,7 @@ operation failed (verify FAIL, pacman \-U non-zero, restore error)
 invalid args or refused (boot-critical without
 .BR \-\-confirm\-boot\-critical ,
 unknown filename / package / pacnew action, no AUR helper found);
-.B archward gates:
+.BR "archward gates" " / " "archward doctor" :
 warnings only (no FAIL)
 .TP
 .B 3

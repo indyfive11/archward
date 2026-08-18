@@ -93,6 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _attach_gates_parser(subparsers)
     _attach_risk_parser(subparsers)
     _attach_history_parser(subparsers)
+    _attach_doctor_parser(subparsers)
 
     return p
 
@@ -388,6 +389,28 @@ def _attach_history_parser(subparsers) -> None:
                         help="Run id from `history list`, or `latest`.")
     show_p.add_argument("--json", action="store_true",
                         help="Dump the raw run document (the stable scripting surface).")
+
+
+def _attach_doctor_parser(subparsers) -> None:
+    """`archward doctor` — one-shot read-only self-diagnostic."""
+    sp = subparsers.add_parser(
+        "doctor",
+        help="Run a read-only self-diagnostic (config, sudo, askpass, GUI stack, ...).",
+        description=(
+            "Runs a battery of read-only health checks: archward identity, "
+            "distro, config validity, sudo/askpass availability, pacman "
+            "tooling and DB lock, disk space, cache rollback safety, state "
+            "directories, AUR helper, services config, GUI stack, and the "
+            "last recorded run. Changes nothing — no config writes, no "
+            "directory creation, no password prompts. Exits 0 if all pass, "
+            "1 if any check FAILs, 2 if warnings only (no FAIL). Attach "
+            "the output (or --json) to bug reports."
+        ),
+    )
+    sp.add_argument(
+        "--json", action="store_true",
+        help="Emit the checks as a stable JSON document (schema_version 1).",
+    )
 
 
 def _resolve_config_path(profile: str | None):
@@ -785,6 +808,9 @@ def _dispatch_subcommand(args, config_path) -> int:
             return cmd.cmd_show(args, config_path)
         print("archward history: unknown action — try `archward history --help`", file=sys.stderr)
         return 2
+    if args.command == "doctor":
+        from archward.cli_subcommands import doctor as cmd
+        return cmd.cmd_doctor(args, config_path)
     print(f"archward: unknown command {args.command!r}", file=sys.stderr)
     return 2
 

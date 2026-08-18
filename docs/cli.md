@@ -640,6 +640,61 @@ config_rewritten  bool
 
 ---
 
+## `archward doctor`
+
+One-shot **read-only** self-diagnostic — the first command to run (and the
+output to attach) when archward misbehaves on a box.
+
+```
+archward doctor [--json]
+```
+
+Checks: archward identity (version, install location, interpreter),
+distro, config validity (parse errors, invalid sections falling back to
+defaults, unreadable/root-owned files), sudo availability, askpass
+discovery (including a broken `privilege.askpass` override and untrusted
+`$SUDO_ASKPASS`), pacman + pacman-contrib tooling, pacman DB lock
+(live-holder vs stale), disk space, cache rollback safety, state-dir
+permissions/writability, AUR helper, stale `services.to_verify` entries,
+GUI stack (PySide6 import **and** Qt platform-plugin initialization —
+a box can import PySide6 fine and still fail at GUI launch), and the
+last recorded run.
+
+Doctor changes nothing: no config writes, no directory creation, no
+password prompts (`sudo -n` only — it never triggers askpass). Checks
+that hit an error or hang are reported as rows; the report always
+completes. Where a problem has a known fix, the row's detail names the
+exact command.
+
+Severities intentionally mirror the pipeline's own: a condition the
+pre-flight treats as WARN (cache DANGEROUS) or FAIL (DB lock, low disk)
+gets the same status here.
+
+| Flag | Effect |
+|---|---|
+| `--json` | Emit the checks as a JSON document instead of the table. |
+
+`--json` is a stable scripting surface like the run-record document:
+
+```
+schema_version    1 — increments only on a rename/removal/shape change.
+                  New fields may be ADDED without a bump: consumers must
+                  ignore unknown keys.
+checks            [{name, status, message, detail}] — status is the
+                  closed vocabulary pass/warn/fail/skipped; detail may
+                  be null.
+```
+
+### Exit codes
+
+```
+0  all checks pass
+1  one or more FAIL
+2  warnings only (no FAIL)
+```
+
+---
+
 ## Subcommand exit-code summary
 
 ```
@@ -647,7 +702,7 @@ config_rewritten  bool
 1  operation failed (verify FAIL, pacman -U non-zero, restore error)
 2  invalid args or refused (boot-critical without --confirm, unknown
    filename/package, unknown pacnew action, no AUR helper found);
-   archward gates: warnings only (no FAIL)
+   archward gates, archward doctor: warnings only (no FAIL)
 3  snapshot / run record not found or incomplete
 ```
 
