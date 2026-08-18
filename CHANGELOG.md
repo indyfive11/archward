@@ -4,6 +4,29 @@ All notable changes to **archward** are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-08-17
+
+### Added
+
+- **`archward doctor`** — one-shot **read-only** self-diagnostic: 15
+  health checks covering archward identity (version, install path,
+  interpreter — catches packaged-vs-dev skew), distro, config validity
+  (parse errors, per-section fallbacks, newer-schema read-only mode,
+  unreadable/root-owned files, dead symlinks), sudo, askpass discovery
+  (broken `privilege.askpass` override, untrusted `$SUDO_ASKPASS`,
+  headless sessions), pacman tooling, DB lock (live-holder vs stale,
+  with the exact recovery hint), disk space, cache rollback safety,
+  state-dir permissions, AUR helper, stale `services.to_verify`
+  entries, the GUI stack (PySide6 import **and** a Qt platform-plugin
+  probe — a box can import PySide6 fine and still abort at GUI
+  launch), and the last recorded run. Changes nothing: no config
+  writes, no directory creation, no password prompts. Checks that
+  crash or hang become report rows; the report always completes.
+  Exit codes mirror `archward gates` (0 clean / 1 any FAIL / 2
+  warnings only); `--json` emits a stable `schema_version` 1 document
+  for bug reports and scripting. Where a problem has a known fix, the
+  check names the exact command.
+
 ## [0.5.0] — 2026-08-13
 
 ### Added — run history
